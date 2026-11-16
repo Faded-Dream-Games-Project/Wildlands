@@ -31,3 +31,4 @@ mods/**/obj/
 .DS_Store
 *.swp
 *~
+core*
