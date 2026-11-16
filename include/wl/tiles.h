@@ -1,0 +1,75 @@
+/* tiles.h — texture atlas tile layout.
+ *
+ * The base atlas (assets/textures/blocks.png) is a 16x16 grid of 16px tiles.
+ * Base tile indices are stable: save files and mods may reference them.
+ * tools/gen_assets.py MUST generate tiles in exactly this order; the unit
+ * tests verify TILE_BASE_COUNT matches the generated atlas layout file. */
+#ifndef WL_TILES_H
+#define WL_TILES_H
+
+#include "wl/wl_common.h"
+
+#define WL_ATLAS_GRID 16 /* tiles per row/column -> 256 tile slots */
+#define WL_TILE_PX    16 /* tile size in pixels   -> 256x256 atlas */
+
+enum WlTile {
+    TILE_STONE = 0,
+    TILE_DIRT,
+    TILE_GRASS_TOP,
+    TILE_GRASS_SIDE,
+    TILE_COBBLE,
+    TILE_PLANKS,
+    TILE_SAND,
+    TILE_SANDSTONE,
+    TILE_WATER,
+    TILE_GLASS,
+    TILE_LOG_SIDE,
+    TILE_LOG_TOP,
+    TILE_LEAVES,
+    TILE_BIRCH_LOG_SIDE,
+    TILE_BIRCH_LOG_TOP,
+    TILE_BIRCH_LEAVES,
+    TILE_GRAVEL,
+    TILE_COAL_ORE,
+    TILE_IRON_ORE,
+    TILE_GOLD_ORE,
+    TILE_DIAMOND_ORE,
+    TILE_BEDROCK,
+    TILE_SNOW,
+    TILE_GRASS_SNOW_SIDE,
+    TILE_ICE,
+    TILE_CACTUS_SIDE,
+    TILE_CACTUS_TOP,
+    TILE_CRAFTING_TOP,
+    TILE_CRAFTING_SIDE,
+    TILE_CRAFTING_FRONT,
+    TILE_TORCH,
+    TILE_FLOWER_RED,
+    TILE_FLOWER_YELLOW,
+    TILE_TALLGRASS,
+    TILE_ICON_STICK,
+    TILE_ICON_COAL,
+    TILE_ICON_RAW_IRON,
+    TILE_ICON_RAW_GOLD,
+    TILE_ICON_DIAMOND,
+    TILE_ICON_APPLE,
+    TILE_ICON_PICK_WOOD,
+    TILE_ICON_PICK_STONE,
+    TILE_ICON_PICK_IRON,
+    TILE_ICON_PICK_DIAMOND,
+    TILE_ICON_AXE_WOOD,
+    TILE_ICON_AXE_STONE,
+    TILE_ICON_AXE_IRON,
+    TILE_ICON_AXE_DIAMOND,
+    TILE_ICON_SHOVEL_WOOD,
+    TILE_ICON_SHOVEL_STONE,
+    TILE_ICON_SHOVEL_IRON,
+    TILE_ICON_SHOVEL_DIAMOND,
+    TILE_ICON_SWORD_WOOD,
+    TILE_ICON_SWORD_STONE,
+    TILE_ICON_SWORD_IRON,
+    TILE_ICON_SWORD_DIAMOND,
+    TILE_BASE_COUNT
+};
+
+#endif /* WL_TILES_H */

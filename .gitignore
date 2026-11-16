@@ -1,0 +1,31 @@
+# Build outputs
+bin/
+obj/
+*.o
+*.d
+
+# Vendored raylib build artifacts (sources ARE committed)
+third_party/raylib/src/*.o
+third_party/raylib/src/libraylib.a
+third_party/raylib/build/
+
+# Runtime data created by the game
+logs/*
+!logs/.gitkeep
+worlds/*
+!worlds/.gitkeep
+config/*
+!config/.gitkeep
+screenshots/*
+!screenshots/.gitkeep
+
+# Mod build artifacts (mod sources are committed)
+mods/**/*.so
+mods/**/*.dll
+mods/**/*.o
+mods/**/obj/
+
+# OS / editor noise
+.DS_Store
+*.swp
+*~
