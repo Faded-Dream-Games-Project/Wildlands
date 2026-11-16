@@ -5,6 +5,17 @@ unless the code for it ships in this repository.
 
 ## Implemented
 
+### Performance & stability
+- Staged startup with per-stage timings and actionable fatal errors
+  (missing display, GL context failure) — no silent crashes
+- Frame pacing: Auto 60 fps cap by default (VSync paces when it engages;
+  the cap prevents uncapped spinning when it does not), user limit 30–240
+- Runtime self test (`make selftest`): physics, raycast, mining, placing,
+  session save + disk round-trip, return to menu — 11 checks
+- Timing instrumentation: frame avg/worst (F3), chunk generation and
+  meshing times, RSS; ASAN-clean with no leaks in game code
+- Headless support: `make run` auto-starts Xvfb with software GL
+
 ### Engine
 - Chunk-based voxel world (16×16×128), hash-map storage, streaming with
   configurable render distance (2–16 chunks)

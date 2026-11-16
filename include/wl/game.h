@@ -97,6 +97,27 @@ typedef struct WlGame {
     bool demo_menu;
     char demo_start_menu[16];   /* "" | world select | create | settings */
     int demo_overlay;           /* 0 none, 2 inventory, 3 crafting table */
+
+    /* runtime self test (--selftest / make selftest) */
+    bool selftest;
+    bool selftest_failed;
+
+    /* startup diagnostics */
+    double init_started_ms;     /* CLOCK_MONOTONIC at init begin */
+    double init_done_ms;        /* total init time */
+    double first_frame_ms;      /* init begin -> first presented frame */
+    bool first_frame_done;
+    bool audio_pending;         /* audio device init deferred to frame 1 */
+
+    /* frame-time statistics (debug overlay + perf logs) */
+    float ft_ema_ms;            /* exponential average frame time */
+    float ft_worst_ms;          /* worst frame time in the last ~128 */
+    float ft_hist[128];
+    int ft_hist_count, ft_hist_next;
+
+    /* cached main-menu background (rendered once per window size) */
+    RenderTexture menu_bg;
+    int menu_bg_w, menu_bg_h;
 } WlGame;
 
 /* Boot: paths, logging, config, window, registries, assets, audio. */

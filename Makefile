@@ -43,7 +43,7 @@ DEP := $(OBJ:.o=.d)
 MOD_SRC := mods/example_mod/example_mod.c
 MOD_OUT := mods/example_mod/mod.so
 
-.PHONY: all debug asan run test raylib mods assets clean distclean help
+.PHONY: all debug asan run selftest test raylib mods assets clean distclean help
 
 all: $(BIN)
 
@@ -53,13 +53,20 @@ debug:
 asan:
 	$(MAKE) BUILD=asan all
 
+run: all
+	@tools/launch.sh $(BIN)
+
+selftest: all
+	@tools/launch.sh $(BIN) --selftest
+
 help:
 	@echo "Wildlands make targets:"
 	@echo "  all        release build -> $(BIN)"
 	@echo "  debug      debug build   -> $(BIN_DIR)/wildlands_debug"
 	@echo "  asan       AddressSanitizer build -> $(BIN_DIR)/wildlands_asan"
-	@echo "  run        build + run"
+	@echo "  run        build + run (auto Xvfb fallback when headless)"
 	@echo "  test       build + run unit tests"
+	@echo "  selftest   build + run the in-game runtime self test"
 	@echo "  raylib     (re)build vendored raylib"
 	@echo "  mods       build the example mod -> $(MOD_OUT)"
 	@echo "  assets     regenerate assets (dev only, Python + Pillow)"

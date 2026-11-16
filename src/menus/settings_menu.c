@@ -83,9 +83,10 @@ void wl_menu_settings(WlGame *g)
         wl_ui_label(&g->ui, r.label, "Anti-Aliasing 4x (restart)", RAYWHITE, false);
         if (wl_ui_toggle(&g->ui, r.control, &c->msaa)) wl_game_apply_settings(g);
 
-        char fps_lbl[48];
+        char fps_lbl[64];
         snprintf(fps_lbl, sizeof(fps_lbl), "FPS Limit: %s",
-                 c->fps_limit > 0 ? TextFormat("%d", c->fps_limit) : "Off");
+                 c->fps_limit > 0 ? TextFormat("%d", c->fps_limit)
+                                  : "Auto (60)");
         next_row(&r, x, w, &y);
         wl_ui_label(&g->ui, r.label, fps_lbl, RAYWHITE, false);
         if (wl_ui_slider_i(&g->ui, r.control, &c->fps_limit, 0, 240, 30))

@@ -35,6 +35,8 @@ bool  wl_delete_tree(const char *path);
 int64_t wl_time_unix(void);
 /* "YYYY-MM-DD HH:MM" in local time. */
 void  wl_format_datetime(char *buf, size_t cap, int64_t t);
+/* Resident set size in MiB (Linux; -1 when unavailable). Diagnostics only. */
+int   wl_util_rss_mb(void);
 
 /* --- key=value line parsing (shared by options.txt, manifests, level.dat) ---
  * Skips blank lines and '#' comments, trims whitespace.

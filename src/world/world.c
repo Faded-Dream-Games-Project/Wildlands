@@ -15,7 +15,16 @@
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
+#include <time.h>
 #include <pthread.h>
+
+/* monotonic clock for timing diagnostics */
+static double wl_monotonic_ms(void)
+{
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (double)ts.tv_sec * 1000.0 + (double)ts.tv_nsec / 1000000.0;
+}
 
 #define WL_HASH_BITS 10
 #define WL_HASH_SIZE (1 << WL_HASH_BITS)
@@ -31,6 +40,12 @@ typedef struct {
 typedef struct {
     int32_t cx, cz;
 } WlGenJob;
+
+/* private argument block for the generation worker (embedded in WlWorld) */
+typedef struct {
+    WlWorldGen gen; /* private copy; never touched by the main thread */
+    WlWorld *w;
+} WlGenThreadArg;
 
 struct WlWorld {
     WlWorldGen gen;
@@ -58,7 +73,13 @@ struct WlWorld {
     WlGenResult done_q[WL_DONE_QUEUE_CAP];
     int done_q_head, done_q_count;
 
-    WlWorldStats stats;
+    /* timing diagnostics (exported through wl_world_stats) */
+    double gen_ms_total;           /* worker thread, written under lock */
+    int gen_count;
+    float mesh_ms_ema, mesh_ms_last; /* main thread only */
+
+    /* worker-thread argument (embedded: no allocation to manage) */
+    WlGenThreadArg thread_arg;
 };
 
 /* ------------------------------------------------------------------ */
@@ -128,11 +149,6 @@ static WlChunk *chunk_ensure(WlWorld *w, int cx, int cz)
 /* generation worker                                                    */
 /* ------------------------------------------------------------------ */
 
-typedef struct {
-    WlWorldGen gen; /* private copy; never touched by the main thread */
-    WlWorld *w;
-} WlGenThreadArg;
-
 static void *gen_thread_main(void *argp)
 {
     WlGenThreadArg *arg = argp;
@@ -155,8 +171,11 @@ static void *gen_thread_main(void *argp)
         r.cz = job.cz;
         r.blocks = malloc(WL_CHUNK_VOL);
         r.biome = malloc(WL_CHUNK_AREA);
+        double gen_ms = 0.0;
         if (r.blocks && r.biome) {
+            double t0 = wl_monotonic_ms();
             wl_worldgen_chunk(&arg->gen, job.cx, job.cz, r.blocks, r.biome);
+            gen_ms = wl_monotonic_ms() - t0;
         } else {
             WL_LOGE("gen thread: out of memory for chunk %d,%d", job.cx, job.cz);
             free(r.blocks);
@@ -166,6 +185,8 @@ static void *gen_thread_main(void *argp)
         }
 
         pthread_mutex_lock(&arg->w->lock);
+        arg->w->gen_ms_total += gen_ms;
+        arg->w->gen_count++;
         while (arg->w->done_q_count == WL_DONE_QUEUE_CAP && !arg->w->stop)
             pthread_cond_wait(&arg->w->cv_space, &arg->w->lock);
         if (arg->w->stop) {
@@ -268,16 +289,12 @@ WlWorld *wl_world_create(const WlWorldParams *params, const char *save_dir)
     pthread_cond_init(&w->cv_work, NULL);
     pthread_cond_init(&w->cv_space, NULL);
 
-    WlGenThreadArg *arg = malloc(sizeof(WlGenThreadArg));
-    if (arg) {
-        arg->gen = w->gen;
-        arg->w = w;
-        if (pthread_create(&w->thread, NULL, gen_thread_main, arg) == 0) {
-            w->thread_ok = true;
-        } else {
-            WL_LOGW("generation thread failed to start; using inline generation");
-            free(arg);
-        }
+    w->thread_arg.gen = w->gen; /* private copy for the worker */
+    w->thread_arg.w = w;
+    if (pthread_create(&w->thread, NULL, gen_thread_main, &w->thread_arg) == 0) {
+        w->thread_ok = true;
+    } else {
+        WL_LOGW("generation thread failed to start; using inline generation");
     }
     WL_LOGI("world '%s' created (seed %llu, type %d, gamemode %d, thread %s)",
             w->name, (unsigned long long)params->seed, params->type,
@@ -434,6 +451,7 @@ WlWorldStats wl_world_stats(const WlWorld *w)
 {
     WlWorldStats s = { 0 };
     if (!w) return s;
+    WlWorld *mw = (WlWorld *)w; /* const-cast: brief lock for worker counters */
     s.loaded = w->list_count;
     s.queued_gen = w->gen_q_count;
     for (int i = 0; i < w->list_count; i++) {
@@ -442,6 +460,12 @@ WlWorldStats wl_world_stats(const WlWorld *w)
         if (c->generated && !c->dirty_mesh) s.meshed++;
         s.tris += c->mesh_opaque.tri_count + c->mesh_transparent.tri_count;
     }
+    pthread_mutex_lock(&mw->lock);
+    s.gen_ms_total = mw->gen_ms_total;
+    s.gen_count = mw->gen_count;
+    pthread_mutex_unlock(&mw->lock);
+    s.mesh_ms_ema = mw->mesh_ms_ema;
+    s.mesh_ms_last = mw->mesh_ms_last;
     return s;
 }
 
@@ -561,7 +585,10 @@ void wl_world_update_ex(WlWorld *w, float player_x, float player_z,
         if (cheb_z > cheb) cheb = cheb_z;
         if (cheb > w->render_distance) continue;
         if (!neighbors_ready(w, c->cx, c->cz)) continue;
+        double t0 = wl_monotonic_ms();
         wl_mesher_build(w, c);
+        w->mesh_ms_last = (float)(wl_monotonic_ms() - t0);
+        w->mesh_ms_ema += (w->mesh_ms_last - w->mesh_ms_ema) * 0.2f;
         mesh_budget--;
     }
 }

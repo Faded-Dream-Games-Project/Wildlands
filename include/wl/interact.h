@@ -34,4 +34,8 @@ int wl_interact_update(struct WlPlayer *p, struct WlWorld *w,
 /* What the player is looking at (for the HUD highlight). */
 WlTarget wl_interact_query(struct WlWorld *w, const struct WlPlayer *p);
 
+/* Test seam used by --selftest: while enabled, these values replace the
+ * physical mouse-button state. Not used in normal play. */
+void wl_interact_debug_mouse(bool left, bool right, bool enable);
+
 #endif /* WL_INTERACT_H */

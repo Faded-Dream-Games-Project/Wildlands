@@ -28,6 +28,11 @@ typedef struct {
     int meshed;        /* chunks with a fresh mesh  */
     int queued_gen;
     long tris;
+    /* timing diagnostics (worker/main-thread measured) */
+    double gen_ms_total;  /* terrain generation, worker thread */
+    int gen_count;
+    float mesh_ms_ema;    /* chunk meshing, main thread */
+    float mesh_ms_last;
 } WlWorldStats;
 
 WlWorld *wl_world_create(const WlWorldParams *params, const char *save_dir);

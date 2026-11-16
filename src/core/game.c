@@ -49,6 +49,8 @@ static void parse_args(WlGame *g, int argc, char **argv)
             wl_scpy(g->demo_start_menu, argv[++i], sizeof(g->demo_start_menu));
         } else if (wl_str_eq(argv[i], "--overlay") && i + 1 < argc) {
             g->demo_overlay = wl_str_eq(argv[++i], "craft") ? 3 : 2;
+        } else if (wl_str_eq(argv[i], "--selftest")) {
+            g->selftest = true;
         } else if (wl_str_eq(argv[i], "--help") || wl_str_eq(argv[i], "-h")) {
             printf("Wildlands %s\n"
                    "  --world <name>        play this world (created if missing)\n"
@@ -59,11 +61,39 @@ static void parse_args(WlGame *g, int argc, char **argv)
                    "  --screenshot <path>   save a screenshot when exiting\n"
                    "  --width/--height <n>  window size override\n"
                    "  --menu <screen>       test: show menu (main|worlds|create|settings)\n"
-                   "  --overlay <inv|craft> test: open the inventory overlay in-world\n",
+                   "  --overlay <inv|craft> test: open the inventory overlay in-world\n"
+                   "  --selftest            runtime self test: mine/place/save/exit\n",
                    WL_VERSION_STRING);
             exit(0);
         }
     }
+}
+
+/* ------------------------------------------------------------------ */
+/* startup timing + frame pacing                                       */
+/* ------------------------------------------------------------------ */
+
+static double stage_mark(void)
+{
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (double)ts.tv_sec * 1000.0 + (double)ts.tv_nsec / 1000000.0;
+}
+
+static void stage_done(const char *name, double t0)
+{
+    WL_LOGI("startup: %-26s %7.1f ms", name, stage_mark() - t0);
+}
+
+/* Effective FPS target. fps_limit = 0 means Auto: a 60 fps cap. VSync
+ * still paces to the display when it engages (the target only throttles,
+ * never accelerates); when vsync is a no-op (Xvfb, some compositors or
+ * drivers) the cap prevents uncapped rendering from pinning the CPU/GPU.
+ * Users wanting more can set the slider up to 240. */
+static int effective_fps_limit(const WlConfig *c)
+{
+    if (c->fps_limit > 0) return c->fps_limit;
+    return 60;
 }
 
 /* ------------------------------------------------------------------ */
@@ -76,17 +106,34 @@ bool wl_game_init(WlGame *g, int argc, char **argv)
     g->state = WL_STATE_MAIN_MENU;
     g->rebinding_action = -1;
     g->menus.selected = -1;
+    g->audio_pending = true;
     parse_args(g, argc, argv);
+    if (g->selftest && g->demo_world[0] == '\0') {
+        /* fixed world + seed so the self test is reproducible (the world
+         * is deleted after the runtime dirs exist, see below) */
+        wl_scpy(g->demo_world, "SelfTest", sizeof(g->demo_world));
+        g->demo_seed = 4242;
+    }
 
+    double t_total = stage_mark();
+    g->init_started_ms = t_total;
+    double t = t_total;
+
+    /* --- 1. project root + runtime directories --- */
     if (!wl_paths_init(argv[0])) {
-        fprintf(stderr, "Wildlands: cannot locate the project root (missing assets/)\n");
+        fprintf(stderr, "Wildlands: FATAL: cannot locate the project root "
+                        "(no assets/ next to the executable or the cwd)\n");
         return false;
     }
     if (!wl_paths_ensure_dirs()) {
-        fprintf(stderr, "Wildlands: cannot create runtime directories\n");
+        fprintf(stderr, "Wildlands: FATAL: cannot create runtime directories under %s\n",
+                wl_paths_root());
         return false;
     }
+    stage_done("paths + runtime dirs", t);
+    t = stage_mark();
 
+    /* --- 2. logging --- */
     char logpath[WL_PATH_MAX];
     {
         time_t now = time(NULL);
@@ -104,8 +151,10 @@ bool wl_game_init(WlGame *g, int argc, char **argv)
     wl_paths_prune_logs(8);
     WL_LOGI("=== " WL_GAME_NAME " %s ===", WL_VERSION_STRING);
     WL_LOGI("project root: %s", wl_paths_root());
+    stage_done("logging", t);
+    t = stage_mark();
 
-    /* config + keybindings */
+    /* --- 3. configuration + keybindings --- */
     char cfgpath[WL_PATH_MAX], kbpath[WL_PATH_MAX];
     wl_path_config(cfgpath, sizeof(cfgpath), "options.txt");
     wl_path_config(kbpath, sizeof(kbpath), "keybindings.txt");
@@ -120,18 +169,47 @@ bool wl_game_init(WlGame *g, int argc, char **argv)
         g->cfg.window_width = g->demo_width;
         g->cfg.window_height = g->demo_height;
     }
+    stage_done("config + keybindings", t);
+    t = stage_mark();
 
-    /* window */
+    /* --- 4. display pre-flight: fail with an actionable message instead
+     *        of crashing later inside texture loading --- */
+    const char *disp = getenv("DISPLAY");
+    const char *wayland = getenv("WAYLAND_DISPLAY");
+    if ((disp == NULL || disp[0] == '\0') &&
+        (wayland == NULL || wayland[0] == '\0')) {
+        WL_LOGE("FATAL: no display available (DISPLAY and WAYLAND_DISPLAY are unset)");
+        WL_LOGE("  - run the game inside an X11 or Wayland session, or");
+        WL_LOGE("  - headless testing:  Xvfb :99 &  DISPLAY=:99 ./bin/wildlands");
+        WL_LOGE("  - or simply:  make run  (auto-starts Xvfb when available)");
+        fprintf(stderr,
+                "Wildlands: FATAL: no display available. See logs/wildlands-*.log\n");
+        return false;
+    }
+
+    /* --- 5. window + GL context --- */
     unsigned int flags = FLAG_WINDOW_RESIZABLE;
     if (g->cfg.vsync) flags |= FLAG_VSYNC_HINT;
     if (g->cfg.msaa) flags |= FLAG_MSAA_4X_HINT;
     SetConfigFlags(flags);
     InitWindow(g->cfg.window_width, g->cfg.window_height,
                WL_GAME_NAME " " WL_VERSION_STRING);
+    if (!IsWindowReady()) {
+        WL_LOGE("FATAL: window/OpenGL initialization failed (raylib output above)");
+        WL_LOGE("  Wildlands needs an OpenGL 3.3 context. On old GPUs try");
+        WL_LOGE("  software rendering:  LIBGL_ALWAYS_SOFTWARE=1 ./bin/wildlands");
+        fprintf(stderr, "Wildlands: FATAL: window/OpenGL initialization failed.\n");
+        return false;
+    }
     if (g->cfg.borderless) SetWindowState(FLAG_WINDOW_UNDECORATED);
-    SetTargetFPS(g->cfg.fps_limit > 0 ? (unsigned)g->cfg.fps_limit : 0);
+    SetTargetFPS((unsigned)effective_fps_limit(&g->cfg));
+    WL_LOGI("frame pacing: vsync=%s, fps limit=%s (%d fps)",
+            g->cfg.vsync ? "on" : "off",
+            g->cfg.fps_limit > 0 ? "user" : "auto", effective_fps_limit(&g->cfg));
+    stage_done("window + GL context", t);
+    t = stage_mark();
 
-    /* registries + assets */
+    /* --- 6. registries + assets + mods --- */
     wl_blocks_init();
     wl_items_init();
     wl_crafting_init();
@@ -140,7 +218,8 @@ bool wl_game_init(WlGame *g, int argc, char **argv)
     wl_path_assets(assets_root, sizeof(assets_root), "");
     g->assets = wl_assets_create(assets_root);
     if (!g->assets) {
-        WL_LOGE("asset manager failed to initialize");
+        WL_LOGE("FATAL: asset manager failed to initialize");
+        fprintf(stderr, "Wildlands: FATAL: asset initialization failed.\n");
         return false;
     }
     /* mods register blocks/items/textures before the atlas is finalized */
@@ -148,13 +227,17 @@ bool wl_game_init(WlGame *g, int argc, char **argv)
     wl_path_mods(mods_root, sizeof(mods_root), "");
     wl_mods_init(&g->mods, g->assets, mods_root);
     wl_assets_finalize_atlas(g->assets);
+    stage_done("assets + mods", t);
+    t = stage_mark();
 
-    wl_audio_init(&g->audio, g->assets);
+    /* --- 7. renderer (audio is deferred to the first frame so a slow
+     *        audio device probe cannot blank the window) --- */
     wl_renderer_init(&g->rend, g->assets);
     memset(&g->ui, 0, sizeof(g->ui));
     g->ui_held.item = WL_ITEM_NONE;
+    stage_done("renderer", t);
 
-    /* demo mode: jump straight into a world, or park on a menu screen */
+    /* --- 8. entry point for demos/tests --- */
     if (g->demo_menu) {
         if (wl_str_eq(g->demo_start_menu, "worlds") ||
             wl_str_eq(g->demo_start_menu, "create")) {
@@ -169,10 +252,14 @@ bool wl_game_init(WlGame *g, int argc, char **argv)
             g->state = WL_STATE_SETTINGS;
         }
         EnableCursor();
+        g->init_done_ms = stage_mark() - t_total;
+        WL_LOGI("startup complete in %.1f ms", g->init_done_ms);
         return true;
     }
 
     if (g->demo_world[0] != '\0') {
+        if (g->selftest)
+            wl_worlds_delete("SelfTest"); /* always run from a clean state */
         WlWorldEntry list[64];
         int n = wl_worlds_list(list, 64);
         bool found = false;
@@ -193,7 +280,9 @@ bool wl_game_init(WlGame *g, int argc, char **argv)
         }
     }
 
-    if (g->demo_frames > 0) EnableCursor();
+    if (g->demo_frames > 0 || g->selftest) EnableCursor();
+    g->init_done_ms = stage_mark() - t_total;
+    WL_LOGI("startup complete in %.1f ms", g->init_done_ms);
     return true;
 }
 
@@ -219,8 +308,9 @@ void wl_game_shutdown(WlGame *g)
     wl_audio_shutdown(&g->audio);
     wl_mods_shutdown(&g->mods);
     wl_assets_destroy(g->assets);
+    if (g->menu_bg.id != 0) UnloadRenderTexture(g->menu_bg);
     if (g->world) wl_world_destroy(g->world);
-    CloseWindow();
+    if (IsWindowReady()) CloseWindow();
     wl_log_close();
 }
 
@@ -265,7 +355,9 @@ void wl_game_apply_settings(WlGame *g)
         s_h = c->window_height;
     }
 
-    SetTargetFPS(c->fps_limit > 0 ? (unsigned)c->fps_limit : 0);
+    /* frame pacing: honor the user limit; Auto keeps a safety cap so a
+     * non-engaging vsync cannot render uncapped */
+    SetTargetFPS((unsigned)effective_fps_limit(c));
 
     wl_audio_set_volumes(&g->audio, c->vol_master, c->vol_music, c->vol_sfx,
                          c->vol_ambient);
@@ -359,6 +451,159 @@ void wl_game_exit_world(WlGame *g)
 }
 
 /* ------------------------------------------------------------------ */
+/* runtime self test (--selftest / make selftest)                      */
+/* Drives the real gameplay paths: physics, raycast, mining, placing,  */
+/* session save, disk round-trip and the return to the main menu.      */
+/* ------------------------------------------------------------------ */
+
+static void selftest_check(WlGame *g, const char *name, bool ok)
+{
+    WL_LOGI("SELFTEST %-4s %s", ok ? "PASS" : "FAIL", name);
+    if (!ok) g->selftest_failed = true;
+}
+
+static void run_selftest(WlGame *g)
+{
+    WlWorld *w = g->world;
+    WlPlayer *p = &g->player;
+    const float dt = 1.0f / 60.0f;
+
+    WL_LOGI("SELFTEST: begin (world '%s', seed %llu)", wl_world_name(w),
+            (unsigned long long)wl_world_gen(w)->seed);
+
+    /* 1. world streaming finished */
+    WlWorldStats st = wl_world_stats(w);
+    selftest_check(g, "chunks generated", st.generated > 50);
+    selftest_check(g, "chunks meshed", st.meshed > 20);
+
+    /* 2. gravity + landing */
+    p->pos.y += 6.0f;
+    p->vel = (Vector3){ 0 };
+    bool landed = false;
+    for (int i = 0; i < 300 && !landed; i++) {
+        wl_player_update(p, w, &g->keys, &g->cfg, &g->audio, dt, false,
+                         wl_world_gamemode(w));
+        landed = p->on_ground;
+    }
+    selftest_check(g, "physics: gravity + landing", landed);
+
+    int px = (int)floorf(p->pos.x);
+    int py = (int)floorf(p->pos.y);
+    int pz = (int)floorf(p->pos.z);
+
+    /* build a deterministic arena around the player: uniform floor, air
+     * above — so the checks below do not depend on spawn terrain or on
+     * leftover edits from a previous session */
+    for (int x = px - 1; x <= px + 7; x++) {
+        for (int z = pz - 3; z <= pz + 1; z++) {
+            wl_world_set_block(w, x, py - 1, z, WL_BLOCK_STONE);
+            for (int y = py; y <= py + 4; y++)
+                wl_world_set_block(w, x, y, z, WL_BLOCK_AIR);
+        }
+    }
+    p->pos = (Vector3){ (float)px + 0.5f, (float)py + 0.01f, (float)pz + 0.5f };
+    p->vel = (Vector3){ 0 };
+
+    /* 3. horizontal movement + wall collision */
+    for (int i = 2; i <= 4; i++)
+        for (int dy = 0; dy < 3; dy++)
+            wl_world_set_block(w, px + i, py + dy, pz, WL_BLOCK_STONE);
+    {
+        float x0 = p->pos.x;
+        bool penetrated = false;
+        for (int i = 0; i < 180; i++) {
+            p->vel.x = 6.0f; /* keep pushing into the wall */
+            wl_player_update(p, w, &g->keys, &g->cfg, &g->audio, dt, false,
+                             wl_world_gamemode(w));
+            if (p->pos.x > (float)px + 1.8f) { penetrated = true; break; }
+        }
+        selftest_check(g, "movement + wall collision",
+                       !penetrated && p->pos.x - x0 > 0.5f);
+    }
+
+    /* 4. mining through the real interact path (mouse test seam) */
+    p->yaw = 0.0f;
+    p->pitch = -1.45f; /* straight down */
+    {
+        WlTarget t = wl_interact_query(w, p);
+        selftest_check(g, "raycast finds target", t.valid);
+        bool mined = false, dropped = false;
+        if (t.valid) {
+            /* deterministic regardless of spawn biome: dirt drops dirt */
+            wl_world_set_block(w, t.x, t.y, t.z, WL_BLOCK_DIRT);
+            int before = wl_inv_count(&p->inv, WL_BLOCK_DIRT);
+            wl_interact_debug_mouse(true, false, true);
+            for (int i = 0; i < 900; i++) {
+                wl_interact_update(p, w, &g->cfg, &g->audio, dt, true);
+                if (wl_world_get_block(w, t.x, t.y, t.z) == WL_BLOCK_AIR) break;
+            }
+            wl_interact_debug_mouse(false, false, false);
+            mined = wl_world_get_block(w, t.x, t.y, t.z) == WL_BLOCK_AIR;
+            dropped = wl_inv_count(&p->inv, WL_BLOCK_DIRT) > before;
+        }
+        selftest_check(g, "mining breaks block", mined);
+        selftest_check(g, "mining yields drop", dropped);
+    }
+
+    /* 5. placing through the real interact path */
+    {
+        /* deterministic target: a stone pad two blocks ahead, air above */
+        for (int dx = -1; dx <= 1; dx++) {
+            wl_world_set_block(w, px + dx, py, pz - 2, WL_BLOCK_STONE);
+            wl_world_set_block(w, px + dx, py + 1, pz - 2, WL_BLOCK_AIR);
+            wl_world_set_block(w, px + dx, py + 2, pz - 2, WL_BLOCK_AIR);
+        }
+        wl_inv_add(&p->inv, WL_BLOCK_COBBLE, 8, 0);
+        int slot = -1;
+        for (int i = 0; i < WL_INV_SIZE; i++)
+            if (p->inv.slots[i].item == WL_BLOCK_COBBLE) { slot = i; break; }
+        if (slot >= 0 && slot < WL_HOTBAR_SIZE) p->selected_slot = slot;
+
+        p->yaw = 0.0f;   /* looking -Z */
+        p->pitch = -0.75f;
+        WlTarget t = wl_interact_query(w, p);
+        bool placed = false;
+        if (t.valid) {
+            int cx = t.px, cy = t.py, cz = t.pz;
+            wl_interact_debug_mouse(false, true, true);
+            for (int i = 0; i < 40; i++)
+                wl_interact_update(p, w, &g->cfg, &g->audio, dt, true);
+            wl_interact_debug_mouse(false, false, false);
+            placed = wl_world_get_block(w, cx, cy, cz) == WL_BLOCK_COBBLE;
+        }
+        selftest_check(g, "placing block", placed);
+    }
+
+    /* 6. session save + disk round-trip */
+    {
+        int sx = px + 6, sy = py + 1, sz = pz;
+        wl_world_set_block(w, sx, sy, sz, WL_BLOCK_SNOW);
+        wl_game_save_session(g);
+        wl_world_set_block(w, sx, sy, sz, WL_BLOCK_AIR); /* wipe in memory */
+        WlChunk *ch = wl_world_chunk_at(w, sx >> 4, sz >> 4);
+        bool rt = ch && wl_world_load_saved_chunk(w, ch) &&
+                  wl_world_get_block(w, sx, sy, sz) == WL_BLOCK_SNOW;
+        selftest_check(g, "save + reload round-trip", rt);
+
+        char path[WL_PATH_MAX];
+        const char *dir = wl_world_save_dir(w);
+        bool files = wl_path_join(path, sizeof(path), dir, "level.dat") &&
+                     wl_file_exists(path);
+        files = files && wl_path_join(path, sizeof(path), dir, "player.dat") &&
+                wl_file_exists(path);
+        selftest_check(g, "session files written", files);
+    }
+
+    /* 7. return to the main menu */
+    wl_game_exit_world(g);
+    selftest_check(g, "exit to main menu",
+                   g->state == WL_STATE_MAIN_MENU && g->world == NULL);
+
+    WL_LOGI("SELFTEST %s", g->selftest_failed ? "FAILED" : "PASSED");
+    g->quit = true;
+}
+
+/* ------------------------------------------------------------------ */
 /* per-state frames                                                    */
 /* ------------------------------------------------------------------ */
 
@@ -384,7 +629,13 @@ static void loading_frame(WlGame *g)
         if (g->player.pos.y < (float)py) g->player.pos.y = (float)py + 0.01f;
 
         g->state = WL_STATE_PLAYING;
-        if (g->demo_frames <= 0) DisableCursor();
+        if (g->demo_frames <= 0 && !g->selftest) DisableCursor();
+
+        /* runtime self test takes over from here */
+        if (g->selftest) {
+            run_selftest(g);
+            return;
+        }
 
         /* test automation: open the inventory/crafting overlay */
         if (g->demo_overlay >= 2) {
@@ -397,7 +648,8 @@ static void loading_frame(WlGame *g)
     }
 
     /* draw loading screen */
-    int w = GetScreenWidth(), h = GetScreenHeight();    BeginDrawing();
+    int w = GetScreenWidth(), h = GetScreenHeight();
+    BeginDrawing();
     ClearBackground((Color){ 16, 18, 24, 255 });
     Texture logo = wl_assets_tex(g->assets, WL_TEX_GUI_LOGO);
     float lw = (float)logo.width * 1.5f, lh = (float)logo.height * 1.5f;
@@ -537,11 +789,20 @@ static void play_frame(WlGame *g)
     /* demo diagnostics + frame countdown */
     if (g->demo_frames > 0) {
         static int diag = 0;
-        if (diag++ % 30 == 0)
-            WL_LOGD("demo pos %.1f,%.1f,%.1f drawn %d tris %ld pending %d",
+        if (diag++ % 30 == 0) {
+            WlWorldStats st = wl_world_stats(g->world);
+            WL_LOGD("demo pos %.1f,%.1f,%.1f drawn %d tris %ld pending %d | "
+                    "%.0f fps, %.2f ms avg, worst %.1f ms, rss %d MiB | "
+                    "gen %d chks %.2f ms avg, mesh %.2f ms avg",
                     p->pos.x, p->pos.y, p->pos.z, g->rend.drawn_chunks,
                     g->rend.drawn_tris,
-                    wl_world_pending(g->world, p->pos.x, p->pos.z));
+                    wl_world_pending(g->world, p->pos.x, p->pos.z),
+                    (float)GetFPS(), g->ft_ema_ms, g->ft_worst_ms,
+                    wl_util_rss_mb(),
+                    st.gen_count,
+                    st.gen_count > 0 ? st.gen_ms_total / (double)st.gen_count : 0.0,
+                    st.mesh_ms_ema);
+        }
         if (--g->demo_frames <= 0) g->quit = true;
     }
 }
@@ -563,14 +824,42 @@ static void paused_frame(WlGame *g)
 void wl_game_run_frame(WlGame *g)
 {
     if (g->quit) return;
+
+    /* deferred audio init: the first frame is already on screen, so even a
+     * slow audio device probe cannot make the game look like it hangs */
+    if (g->audio_pending) {
+        g->audio_pending = false;
+        double ta = stage_mark();
+        wl_audio_init(&g->audio, g->assets);
+        wl_audio_set_volumes(&g->audio, g->cfg.vol_master, g->cfg.vol_music,
+                             g->cfg.vol_sfx, g->cfg.vol_ambient);
+        WL_LOGI("startup: audio device %s (%.1f ms)",
+                g->audio.enabled ? "ready" : "unavailable, running silent",
+                stage_mark() - ta);
+    }
+
     wl_ui_begin(&g->ui, g->assets, &g->cfg);
 
+    /* menu states present their own frame (the in-game states wrap their
+     * drawing in BeginDrawing/EndDrawing internally) */
     switch (g->state) {
-    case WL_STATE_MAIN_MENU:    wl_menu_main(g); break;
-    case WL_STATE_WORLD_SELECT: wl_menu_world_select(g); break;
-    case WL_STATE_WORLD_CREATE: wl_menu_world_create(g); break;
-    case WL_STATE_SETTINGS:     wl_menu_settings(g); break;
-    case WL_STATE_MODS:         wl_menu_mods(g); break;
+    case WL_STATE_MAIN_MENU:
+    case WL_STATE_WORLD_SELECT:
+    case WL_STATE_WORLD_CREATE:
+    case WL_STATE_SETTINGS:
+    case WL_STATE_MODS: {
+        BeginDrawing();
+        ClearBackground((Color){ 12, 16, 24, 255 });
+        switch (g->state) {
+        case WL_STATE_MAIN_MENU:    wl_menu_main(g); break;
+        case WL_STATE_WORLD_SELECT: wl_menu_world_select(g); break;
+        case WL_STATE_WORLD_CREATE: wl_menu_world_create(g); break;
+        case WL_STATE_SETTINGS:     wl_menu_settings(g); break;
+        default:                    wl_menu_mods(g); break;
+        }
+        EndDrawing();
+        break;
+    }
     case WL_STATE_LOADING:      loading_frame(g); break;
     case WL_STATE_PLAYING:      play_frame(g); break;
     case WL_STATE_PAUSED:       paused_frame(g); break;
@@ -578,6 +867,23 @@ void wl_game_run_frame(WlGame *g)
     }
 
     wl_ui_end(&g->ui);
+
+    /* frame-time statistics (skip the first frame: it includes init) */
+    if (g->first_frame_done) {
+        float ft = GetFrameTime() * 1000.0f;
+        g->ft_ema_ms += (ft - g->ft_ema_ms) * 0.08f;
+        g->ft_hist[g->ft_hist_next] = ft;
+        g->ft_hist_next = (g->ft_hist_next + 1) % 128;
+        if (g->ft_hist_count < 128) g->ft_hist_count++;
+        float worst = 0.0f;
+        for (int i = 0; i < g->ft_hist_count; i++)
+            if (g->ft_hist[i] > worst) worst = g->ft_hist[i];
+        g->ft_worst_ms = worst;
+    } else {
+        g->first_frame_done = true;
+        g->first_frame_ms = stage_mark() - g->init_started_ms;
+        WL_LOGI("startup: first frame presented after %.1f ms", g->first_frame_ms);
+    }
 
     if (g->demo_frames > 0 && g->demo_menu) {
         if (--g->demo_frames <= 0) g->quit = true;

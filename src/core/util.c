@@ -214,6 +214,22 @@ void wl_format_datetime(char *buf, size_t cap, int64_t t)
         wl_scpy(buf, "unknown", cap);
 }
 
+int wl_util_rss_mb(void)
+{
+#ifdef __linux__
+    FILE *f = fopen("/proc/self/statm", "r");
+    if (!f) return -1;
+    long total = 0, resident = 0;
+    int got = fscanf(f, "%ld %ld", &total, &resident);
+    fclose(f);
+    if (got != 2) return -1;
+    long page = sysconf(_SC_PAGESIZE);
+    return (int)((resident * page) / (1024 * 1024));
+#else
+    return -1;
+#endif
+}
+
 bool wl_kv_line(const char *line, char *key, size_t key_cap,
                 char *val, size_t val_cap)
 {

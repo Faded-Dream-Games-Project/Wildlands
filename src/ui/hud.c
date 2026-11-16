@@ -4,6 +4,7 @@
 #include "wl/block.h"
 #include "wl/item.h"
 #include "wl/tiles.h"
+#include "wl/util.h"
 
 #include <stdio.h>
 #include <math.h>
@@ -143,6 +144,14 @@ static void draw_debug(WlGame *g)
                             st.loaded, g->rend.drawn_chunks, g->rend.drawn_tris);
     lines[n++] = TextFormat("gen queue %d  pending %d", st.queued_gen,
                             wl_world_pending(g->world, p->pos.x, p->pos.z));
+    lines[n++] = TextFormat("%.2f ms avg | worst %.2f ms (1%% low %.0f fps) | rss %d MiB",
+                            g->ft_ema_ms, g->ft_worst_ms,
+                            g->ft_worst_ms > 0.01f ? 1000.0f / g->ft_worst_ms : 0.0f,
+                            wl_util_rss_mb());
+    lines[n++] = TextFormat("chunk gen: %d chunks, %.2f ms avg | mesh: %.2f ms avg, %.2f last",
+                            st.gen_count,
+                            st.gen_count > 0 ? st.gen_ms_total / (double)st.gen_count : 0.0,
+                            st.mesh_ms_ema, st.mesh_ms_last);
 
     for (int i = 0; i < n; i++)
         DrawTextEx(f, lines[i], (Vector2){ 8, 8 + i * (fs + 4) }, fs, 1.0f,

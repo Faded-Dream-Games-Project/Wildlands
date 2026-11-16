@@ -173,9 +173,9 @@ bool wl_path_join(char *out, size_t cap, const char *a, const char *b)
 {
     if (!out || cap == 0 || !a || !b) return false;
     int n;
-    if (*b == '\0')
-        n = snprintf(out, cap, "%s", a);
-    else if (a[strlen(a) - 1] == '/' && a[0] != '\0')
+    if (*b == '\0' || a[0] == '\0')
+        n = snprintf(out, cap, "%s%s", a, b);
+    else if (a[strlen(a) - 1] == '/')
         n = snprintf(out, cap, "%s%s", a, (*b == '/') ? b + 1 : b);
     else
         n = snprintf(out, cap, "%s/%s", a, b);

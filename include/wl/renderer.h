@@ -12,11 +12,18 @@ struct WlConfig;
 
 #define WL_CLOUD_HEIGHT 118.0f
 
+/* raylib 6.2's DrawMesh iterates MAX_MATERIAL_MAPS (12) slots of
+ * material.maps; our owned arrays must match that count. */
+#define WL_MATERIAL_MAPS 12
+
 typedef struct WlRenderer {
     Camera3D cam;
     Material mat_opaque;   /* atlas + chunk shader (solid + cutout) */
     Material mat_water;    /* atlas + chunk shader (alpha blend pass) */
     Material mat_cloud;    /* cloud texture + chunk shader */
+    /* maps arrays owned by the materials above (raylib 6 Material.maps is
+     * a pointer; embedding the arrays keeps the materials heap-free) */
+    MaterialMap mat_maps[3][WL_MATERIAL_MAPS];
     Texture2D atlas;
     WlAssets *assets;
 

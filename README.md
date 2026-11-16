@@ -47,12 +47,18 @@ no root access needed.
 make            # release build  -> bin/wildlands
 make debug      # debug build    -> bin/wildlands_debug
 make asan       # AddressSanitizer build
-make run        # build + run
+make run        # build + run (auto-starts Xvfb when no display is present)
 make test       # build + run the unit tests (145 checks)
+make selftest   # build + run the in-game runtime self test
 make mods       # build the example mod (mods/example_mod/mod.so)
 make assets     # regenerate original assets (dev only, needs Python+Pillow)
 make clean      # remove build artifacts
 ```
+
+Startup is fully staged and logged with per-stage timings; every failure
+(display missing, GL context failed, assets missing) prints an actionable
+message instead of crashing. Frame pacing defaults to Auto (60 fps cap;
+VSync paces when it engages) and is configurable up to 240 in Settings.
 
 The game creates its runtime directories (`worlds/`, `mods/`, `config/`,
 `logs/`, `screenshots/`) automatically on first start.

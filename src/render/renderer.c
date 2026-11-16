@@ -131,21 +131,29 @@ void wl_renderer_init(WlRenderer *r, WlAssets *assets)
     r->sky_horizon = (Color){ 175, 210, 255, 255 };
     r->fog_color = r->sky_horizon;
 
-    r->mat_opaque = LoadMaterialDefault();
+    /* Materials are plain structs sharing the assets-owned shader and
+     * atlas; the maps arrays are embedded in WlRenderer so nothing is
+     * heap-allocated (UnloadMaterial is never called on these — it would
+     * free the shared shader and atlas the asset manager owns). */
+    memset(r->mat_maps, 0, sizeof(r->mat_maps));
+
+    r->mat_opaque = (Material){ 0 };
     r->mat_opaque.shader = wl_assets_shader(assets, WL_SHADER_CHUNK);
-    r->mat_opaque.maps[MATERIAL_MAP_DIFFUSE].texture = r->atlas;
-    r->mat_opaque.maps[MATERIAL_MAP_DIFFUSE].color = WHITE;
+    r->mat_opaque.maps = r->mat_maps[0];
+    r->mat_maps[0][MATERIAL_MAP_DIFFUSE].texture = r->atlas;
+    r->mat_maps[0][MATERIAL_MAP_DIFFUSE].color = WHITE;
 
-    r->mat_water = LoadMaterialDefault();
-    r->mat_water.shader = r->mat_opaque.shader;
-    r->mat_water.maps[MATERIAL_MAP_DIFFUSE].texture = r->atlas;
-    r->mat_water.maps[MATERIAL_MAP_DIFFUSE].color = WHITE;
+    r->mat_water = r->mat_opaque; /* same shader, separate maps array */
+    r->mat_water.maps = r->mat_maps[1];
+    r->mat_maps[1][MATERIAL_MAP_DIFFUSE].texture = r->atlas;
+    r->mat_maps[1][MATERIAL_MAP_DIFFUSE].color = WHITE;
 
-    r->mat_cloud = LoadMaterialDefault();
+    r->mat_cloud = (Material){ 0 };
     r->mat_cloud.shader = r->mat_opaque.shader;
-    r->mat_cloud.maps[MATERIAL_MAP_DIFFUSE].texture =
+    r->mat_cloud.maps = r->mat_maps[2];
+    r->mat_maps[2][MATERIAL_MAP_DIFFUSE].texture =
         wl_assets_tex(assets, WL_TEX_ENV_CLOUDS);
-    r->mat_cloud.maps[MATERIAL_MAP_DIFFUSE].color = WHITE;
+    r->mat_maps[2][MATERIAL_MAP_DIFFUSE].color = WHITE;
 
     r->cam.up = (Vector3){ 0, 1, 0 };
     r->cam.fovy = 75.0f;

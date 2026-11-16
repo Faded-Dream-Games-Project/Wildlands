@@ -4,22 +4,39 @@
 #include "wl/audio.h"
 #include "wl/tiles.h"
 
+/* The background is gradient + a grid of ~400 tinted stone tiles. It is
+ * static, so render it once per window size into a texture instead of
+ * redrawing hundreds of quads every frame. */
 static void draw_background(WlGame *g)
 {
     int sw = GetScreenWidth(), sh = GetScreenHeight();
-    /* soft vertical gradient behind the logo */
-    DrawRectangleGradientV(0, 0, sw, sh, (Color){ 24, 34, 48, 255 },
-                           (Color){ 12, 16, 24, 255 });
-    Texture atlas = wl_assets_tex(g->assets, WL_TEX_ATLAS);
-    int tc = TILE_STONE % WL_ATLAS_GRID, tr = TILE_STONE / WL_ATLAS_GRID;
-    Rectangle src = { tc * 16.0f, tr * 16.0f, 16, 16 };
-    int tile = 48;
-    for (int y = 0; y < sh; y += tile)
-        for (int x = 0; x < sw; x += tile) {
-            Rectangle dst = { (float)x, (float)y, (float)tile, (float)tile };
-            DrawTexturePro(atlas, src, dst, (Vector2){ 0, 0 }, 0.0f,
-                           (Color){ 255, 255, 255, 18 });
-        }
+
+    if (g->menu_bg.id == 0 || sw != g->menu_bg_w || sh != g->menu_bg_h) {
+        if (g->menu_bg.id != 0) UnloadRenderTexture(g->menu_bg);
+        g->menu_bg = LoadRenderTexture(sw, sh);
+        g->menu_bg_w = sw;
+        g->menu_bg_h = sh;
+
+        BeginTextureMode(g->menu_bg);
+        ClearBackground((Color){ 12, 16, 24, 255 });
+        DrawRectangleGradientV(0, 0, sw, sh, (Color){ 24, 34, 48, 255 },
+                               (Color){ 12, 16, 24, 255 });
+        Texture atlas = wl_assets_tex(g->assets, WL_TEX_ATLAS);
+        int tc = TILE_STONE % WL_ATLAS_GRID, tr = TILE_STONE / WL_ATLAS_GRID;
+        Rectangle src = { tc * 16.0f, tr * 16.0f, 16, 16 };
+        int tile = 48;
+        for (int y = 0; y < sh; y += tile)
+            for (int x = 0; x < sw; x += tile) {
+                Rectangle dst = { (float)x, (float)y, (float)tile, (float)tile };
+                DrawTexturePro(atlas, src, dst, (Vector2){ 0, 0 }, 0.0f,
+                               (Color){ 255, 255, 255, 18 });
+            }
+        EndTextureMode();
+    }
+
+    DrawTextureRec(g->menu_bg.texture,
+                   (Rectangle){ 0, 0, (float)sw, -(float)sh },
+                   (Vector2){ 0, 0 }, WHITE);
 }
 
 void wl_menu_main(WlGame *g)

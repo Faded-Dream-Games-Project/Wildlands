@@ -224,6 +224,18 @@ static bool try_place(WlPlayer *p, WlWorld *w, const WlTarget *t,
 /* per-frame update                                                    */
 /* ------------------------------------------------------------------ */
 
+/* test seam: when enabled, replaces the physical mouse buttons (--selftest) */
+static bool s_dbg_active = false;
+static bool s_dbg_left = false;
+static bool s_dbg_right = false;
+
+void wl_interact_debug_mouse(bool left, bool right, bool enable)
+{
+    s_dbg_left = left;
+    s_dbg_right = right;
+    s_dbg_active = enable;
+}
+
 int wl_interact_update(WlPlayer *p, WlWorld *w, const WlConfig *cfg,
                        WlAudio *audio, float dt, bool input_active)
 {
@@ -235,8 +247,10 @@ int wl_interact_update(WlPlayer *p, WlWorld *w, const WlConfig *cfg,
     WlSlot *slot = &p->inv.slots[p->selected_slot];
     const WlItem *held = wl_item_get(slot->item);
 
-    bool mouse_left = input_active && IsMouseButtonDown(MOUSE_BUTTON_LEFT);
-    bool mouse_right = input_active && IsMouseButtonDown(MOUSE_BUTTON_RIGHT);
+    bool mouse_left = input_active &&
+        (s_dbg_active ? s_dbg_left : IsMouseButtonDown(MOUSE_BUTTON_LEFT));
+    bool mouse_right = input_active &&
+        (s_dbg_active ? s_dbg_right : IsMouseButtonDown(MOUSE_BUTTON_RIGHT));
 
     /* ---- eating (hold right mouse with food) ---- */
     const WlItem *food = held;

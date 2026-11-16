@@ -13,5 +13,5 @@ int main(int argc, char **argv)
         wl_game_run_frame(&game);
 
     wl_game_shutdown(&game);
-    return 0;
+    return game.selftest_failed ? 1 : 0;
 }
