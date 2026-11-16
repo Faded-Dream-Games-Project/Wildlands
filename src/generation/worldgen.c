@@ -451,21 +451,33 @@ void wl_worldgen_chunk(const WlWorldGen *wg, int cx, int cz,
 
 bool wl_worldgen_find_spawn(const WlWorldGen *wg, int *out_x, int *out_z)
 {
-    /* spiral out from the origin until we find dry, walkable land */
-    for (int r = 0; r <= 96; r += 4) {
-        for (int a = 0; a < 16; a++) {
-            float ang = (float)a * (6.2831853f / 16.0f);
+    /* dense spiral out from the origin: near first, dry land only */
+    for (int r = 0; r <= 128; r += 2) {
+        int steps = r == 0 ? 1 : (16 + (r > 32 ? 32 : r));
+        for (int a = 0; a < steps; a++) {
+            float ang = (float)a * (6.2831853f / (float)steps);
             int x = (int)(cosf(ang) * r);
             int z = (int)(sinf(ang) * r);
             WlColumn col = shape_column(wg, x, z);
-            if (col.height > WL_SEA_LEVEL + 1 &&
-                col.biome != WL_BIOME_OCEAN && col.biome != WL_BIOME_BEACH) {
+            if (col.height > WL_SEA_LEVEL + 1 && col.biome != WL_BIOME_OCEAN) {
                 *out_x = x;
                 *out_z = z;
                 return true;
             }
         }
     }
+    /* exhaustive grid fallback for awkward archipelagos */
+    for (int z = -128; z <= 128; z += 4) {
+        for (int x = -128; x <= 128; x += 4) {
+            WlColumn col = shape_column(wg, x, z);
+            if (col.height > WL_SEA_LEVEL + 1 && col.biome != WL_BIOME_OCEAN) {
+                *out_x = x;
+                *out_z = z;
+                return true;
+            }
+        }
+    }
+    /* all ocean around the origin: give up, caller handles it */
     *out_x = 0;
     *out_z = 0;
     return false;

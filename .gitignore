@@ -18,12 +18,14 @@ config/*
 !config/.gitkeep
 screenshots/*
 !screenshots/.gitkeep
+!screenshots/README.md-screenshot.png
 
-# Mod build artifacts (mod sources are committed)
+# Mod build artifacts (mod sources are committed; the example ships built)
 mods/**/*.so
 mods/**/*.dll
 mods/**/*.o
 mods/**/obj/
+!mods/example_mod/mod.so
 
 # OS / editor noise
 .DS_Store

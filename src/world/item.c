@@ -1,6 +1,7 @@
 /* item.c — item registry: mirrored block items plus base pure items. */
 #include "wl/item.h"
 #include "wl/tiles.h"
+#include "wl/util.h"
 #include "wl/log.h"
 
 #include <string.h>
@@ -40,6 +41,16 @@ WlItemId wl_items_register(const WlItem *def)
     g_item_count++;
     WL_LOGD("registered item #%d '%s'", (int)id, def->name);
     return id;
+}
+
+bool wl_items_register_at(WlItemId id, const WlItem *def)
+{
+    if (!def || !def->name || id == 0 || id >= 256) return false;
+    /* only unused mirror slots may be claimed */
+    if (g_items[id].name != NULL && !wl_str_eq(g_items[id].name, "reserved"))
+        return false;
+    g_items[id] = *def;
+    return true;
 }
 
 bool wl_item_in_group(WlItemId id, WlItemGroup group)

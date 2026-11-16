@@ -61,6 +61,9 @@ typedef enum {
 /* Registers base items (must run after wl_blocks_init). */
 void        wl_items_init(void);
 WlItemId   wl_items_register(const WlItem *def);
+/* Overwrites a reserved mirror slot (ids 1..255) — used by the mod loader
+ * so modded blocks get an item with the same id. */
+bool        wl_items_register_at(WlItemId id, const WlItem *def);
 const WlItem *wl_item_get(WlItemId id);
 int         wl_items_count(void);
 

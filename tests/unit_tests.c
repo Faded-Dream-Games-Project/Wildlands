@@ -1,0 +1,399 @@
+/* unit_tests.c — deterministic tests for the engine's core systems.
+ * Run with: make test */
+#include "wl/wl_common.h"
+#include "wl/util.h"
+#include "wl/noise.h"
+#include "wl/worldgen.h"
+#include "wl/block.h"
+#include "wl/item.h"
+#include "wl/inventory.h"
+#include "wl/crafting.h"
+#include "wl/config.h"
+#include "wl/keybinds.h"
+#include "wl/world.h"
+#include "wl/world_store.h"
+#include "wl/chunk.h"
+#include "wl/tiles.h"
+#include "raylib.h" /* key codes for keybind roundtrip */
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+static int tests_run = 0;
+static int tests_failed = 0;
+
+#define CHECK(cond) do { \
+    tests_run++; \
+    if (!(cond)) { \
+        tests_failed++; \
+        printf("FAIL %s:%d: %s\r\n", __FILE__, __LINE__, #cond); \
+    } \
+} while (0)
+
+/* ------------------------------------------------------------------ */
+
+static void test_util(void)
+{
+    char buf[8];
+    wl_scpy(buf, "0123456789", sizeof(buf));
+    CHECK(strlen(buf) == 7); /* truncated, always terminated */
+
+    CHECK(wl_clampf(5.0f, 0.0f, 1.0f) == 1.0f);
+    CHECK(wl_clampi(-3, 0, 10) == 0);
+
+    long v = 0;
+    CHECK(wl_parse_long("42", &v) && v == 42);
+    CHECK(!wl_parse_long("4x2", &v));
+    float f = 0;
+    CHECK(wl_parse_float("1.5", &f) && f == 1.5f);
+    bool b = false;
+    CHECK(wl_parse_bool("yes", &b) && b);
+    CHECK(wl_parse_bool("0", &b) && !b);
+
+    char key[16], val[64];
+    CHECK(wl_kv_line("  name = My World  # not a comment", key, sizeof(key), val, sizeof(val)));
+    CHECK(wl_str_eq(key, "name") && wl_str_eq(val, "My World  # not a comment"));
+    CHECK(!wl_kv_line("# comment", key, sizeof(key), val, sizeof(val)));
+}
+
+static void test_rle(void)
+{
+    /* roundtrip on smooth and worst-case data */
+    uint8_t in[WL_CHUNK_VOL], out[WL_CHUNK_VOL], enc[WL_CHUNK_VOL * 2];
+    memset(in, 7, sizeof(in));
+    size_t n = wl_rle_encode(in, sizeof(in), enc, sizeof(enc));
+    CHECK(n == 2 * ((sizeof(in) + 254) / 255)); /* 32768 -> 129 runs */
+    CHECK(wl_rle_decode(enc, n, out, sizeof(out)) == sizeof(in));
+    CHECK(memcmp(in, out, sizeof(in)) == 0);
+
+    /* worst case: alternating bytes */
+    for (size_t i = 0; i < sizeof(in); i++) in[i] = (uint8_t)(i & 1);
+    n = wl_rle_encode(in, sizeof(in), enc, sizeof(enc));
+    CHECK(n == 2 * sizeof(in));
+    CHECK(wl_rle_decode(enc, n, out, sizeof(out)) == sizeof(in));
+    CHECK(memcmp(in, out, sizeof(in)) == 0);
+
+    /* malformed input must not overflow the output buffer */
+    CHECK(wl_rle_decode(enc, n, out, sizeof(out) - 1) == 0);
+}
+
+static void test_noise(void)
+{
+    WlRng a, b;
+    wl_rng_seed(&a, 12345);
+    wl_rng_seed(&b, 12345);
+    bool same = true;
+    for (int i = 0; i < 100; i++)
+        if (wl_rng_u32(&a) != wl_rng_u32(&b)) same = false;
+    CHECK(same);
+
+    /* same input, same output; different seeds differ */
+    CHECK(wl_noise_fbm2(777, 1.25f, -3.5f, 4) == wl_noise_fbm2(777, 1.25f, -3.5f, 4));
+    CHECK(wl_noise_fbm2(777, 1.25f, -3.5f, 4) != wl_noise_fbm2(778, 1.25f, -3.5f, 4));
+
+    /* value noise stays in range */
+    bool in_range = true;
+    for (int i = 0; i < 200; i++) {
+        float v = wl_noise_value3(42, i * 0.37f, -i * 0.11f, i * 0.03f);
+        if (v < -1.001f || v > 1.001f) in_range = false;
+    }
+    CHECK(in_range);
+
+    /* rng range */
+    wl_rng_seed(&a, 1);
+    bool range_ok = true;
+    for (int i = 0; i < 500; i++) {
+        int r = wl_rng_range(&a, 3, 7);
+        if (r < 3 || r > 7) range_ok = false;
+    }
+    CHECK(range_ok);
+}
+
+static void test_worldgen_determinism(void)
+{
+    WlWorldGen wg;
+    wl_worldgen_init(&wg, 987654321, WL_WORLDTYPE_STANDARD);
+
+    static uint8_t a[WL_CHUNK_VOL], b[WL_CHUNK_VOL];
+    static uint8_t ba[WL_CHUNK_AREA], bb[WL_CHUNK_AREA];
+
+    wl_worldgen_chunk(&wg, -3, 7, a, ba);
+    wl_worldgen_chunk(&wg, -3, 7, b, bb);
+    CHECK(memcmp(a, b, sizeof(a)) == 0);
+    CHECK(memcmp(ba, bb, sizeof(ba)) == 0);
+
+    wl_worldgen_init(&wg, 111222333, WL_WORLDTYPE_STANDARD);
+    wl_worldgen_chunk(&wg, -3, 7, b, bb);
+    CHECK(memcmp(a, b, sizeof(a)) != 0); /* different seed, different world */
+
+    /* superflat is solid ground with no air pockets below the surface */
+    wl_worldgen_init(&wg, 5, WL_WORLDTYPE_SUPERFLAT);
+    wl_worldgen_chunk(&wg, 0, 0, a, ba);
+    bool solid = true;
+    for (int y = 0; y <= 4; y++)
+        for (int z = 0; z < 16; z++)
+            for (int x = 0; x < 16; x++)
+                if (a[wl_chunk_index(x, y, z)] == WL_BLOCK_AIR) solid = false;
+    CHECK(solid);
+    CHECK(a[wl_chunk_index(8, 20, 8)] == WL_BLOCK_AIR); /* and air above */
+
+    /* spawn search finds land */
+    wl_worldgen_init(&wg, 42, WL_WORLDTYPE_STANDARD);
+    int sx = 0, sz = 0;
+    CHECK(wl_worldgen_find_spawn(&wg, &sx, &sz));
+    CHECK(wl_worldgen_height_at(&wg, sx, sz) > WL_SEA_LEVEL);
+}
+
+static void test_registries(void)
+{
+    wl_blocks_init();
+    wl_items_init();
+    wl_crafting_init();
+
+    CHECK(wl_blocks_count() >= WL_BLOCK_COUNT_BASE);
+    const WlBlock *stone = wl_block_get(WL_BLOCK_STONE);
+    CHECK(stone && wl_str_eq(stone->name, "stone"));
+    CHECK(stone->drop_item == WL_BLOCK_COBBLE);
+
+    /* item ids mirror block ids for the base game */
+    for (int b = 1; b < WL_BLOCK_COUNT_BASE; b++) {
+        const WlItem *it = wl_item_get((WlItemId)b);
+        CHECK(it != NULL);
+        if (b != WL_BLOCK_WATER) CHECK(it->is_block && it->block_id == b);
+        else CHECK(!it->is_block); /* water shadow item is not placeable */
+    }
+
+    /* tool chain sanity */
+    const WlItem *pick = wl_item_get(WL_ITEM_PICK_DIAMOND);
+    CHECK(pick && pick->tool == WL_TOOL_PICKAXE && pick->tool_tier == 4);
+    CHECK(pick->durability == 1562);
+}
+
+static void test_inventory(void)
+{
+    WlInventory inv;
+    wl_inv_init(&inv);
+    CHECK(inv.slots[0].item == WL_ITEM_NONE);
+
+    CHECK(wl_inv_add(&inv, WL_BLOCK_DIRT, 100, 0));
+    CHECK(wl_inv_count(&inv, WL_BLOCK_DIRT) == 100); /* 64 + 36 across stacks */
+    CHECK(wl_inv_take(&inv, WL_BLOCK_DIRT, 70));
+    CHECK(wl_inv_count(&inv, WL_BLOCK_DIRT) == 30);
+    CHECK(!wl_inv_take(&inv, WL_BLOCK_DIRT, 31));
+    CHECK(wl_inv_count(&inv, WL_BLOCK_DIRT) == 30);
+
+    /* tools stack to 1 */
+    CHECK(wl_inv_add(&inv, WL_ITEM_PICK_WOOD, 2, 60));
+    CHECK(wl_inv_count(&inv, WL_ITEM_PICK_WOOD) == 2);
+    int occupied = 0;
+    for (int i = 0; i < WL_INV_SIZE; i++)
+        if (inv.slots[i].item == WL_ITEM_PICK_WOOD) occupied++;
+    CHECK(occupied == 2);
+
+    /* consume selected slot */
+    inv.slots[0] = (WlSlot){ WL_BLOCK_SAND, 2, 0 };
+    wl_inv_consume_slot(&inv, 0);
+    CHECK(inv.slots[0].count == 1 && inv.slots[0].item == WL_BLOCK_SAND);
+    wl_inv_consume_slot(&inv, 0);
+    CHECK(inv.slots[0].item == WL_ITEM_NONE);
+}
+
+static void test_crafting(void)
+{
+    WlSlot grid[9];
+    /* canonical empty grid: item == WL_ITEM_NONE everywhere */
+    for (int i = 0; i < 9; i++) grid[i] = (WlSlot){ WL_ITEM_NONE, 0, 0 };
+
+    /* any log -> 4 planks (shapeless, group) */
+    grid[0] = (WlSlot){ WL_BLOCK_LOG, 3, 0 };
+    const WlRecipe *r = wl_crafting_match(grid, 2);
+    CHECK(r && r->out_item == WL_BLOCK_PLANKS && r->out_count == 4);
+    grid[0] = (WlSlot){ WL_BLOCK_BIRCH_LOG, 1, 0 };
+    r = wl_crafting_match(grid, 3);
+    CHECK(r && r->out_item == WL_BLOCK_PLANKS);
+
+    /* 2 planks vertical -> 4 sticks, position independent */
+    for (int i = 0; i < 9; i++) grid[i] = (WlSlot){ WL_ITEM_NONE, 0, 0 };
+    grid[4] = (WlSlot){ WL_BLOCK_PLANKS, 1, 0 };
+    grid[7] = (WlSlot){ WL_BLOCK_PLANKS, 1, 0 };
+    r = wl_crafting_match(grid, 3);
+    CHECK(r && r->out_item == WL_ITEM_STICK && r->out_count == 4);
+
+    /* stone pickaxe: material row + stick handle */
+    for (int i = 0; i < 9; i++) grid[i] = (WlSlot){ WL_ITEM_NONE, 0, 0 };
+    grid[0] = (WlSlot){ WL_BLOCK_COBBLE, 1, 0 };
+    grid[1] = (WlSlot){ WL_BLOCK_COBBLE, 1, 0 };
+    grid[2] = (WlSlot){ WL_BLOCK_COBBLE, 1, 0 };
+    grid[4] = (WlSlot){ WL_ITEM_STICK, 1, 0 };
+    grid[7] = (WlSlot){ WL_ITEM_STICK, 1, 0 };
+    r = wl_crafting_match(grid, 3);
+    CHECK(r && r->out_item == WL_ITEM_PICK_STONE);
+
+    /* axe pattern must match mirrored (flipped left-right) */
+    for (int i = 0; i < 9; i++) grid[i] = (WlSlot){ WL_ITEM_NONE, 0, 0 };
+    /* flipped axe placed at columns 1-2:
+       .  M  M
+       .  S  M
+       .  S  .  */
+    grid[1] = (WlSlot){ WL_ITEM_RAW_IRON, 1, 0 };
+    grid[2] = (WlSlot){ WL_ITEM_RAW_IRON, 1, 0 };
+    grid[4] = (WlSlot){ WL_ITEM_STICK, 1, 0 };
+    grid[5] = (WlSlot){ WL_ITEM_RAW_IRON, 1, 0 };
+    grid[7] = (WlSlot){ WL_ITEM_STICK, 1, 0 };
+    r = wl_crafting_match(grid, 3);
+    CHECK(r && r->out_item == WL_ITEM_AXE_IRON);
+
+    /* glass: coal + 4 sand anywhere (shapeless) */
+    for (int i = 0; i < 9; i++) grid[i] = (WlSlot){ WL_ITEM_NONE, 0, 0 };
+    grid[0] = (WlSlot){ WL_ITEM_COAL, 1, 0 };
+    grid[2] = (WlSlot){ WL_BLOCK_SAND, 1, 0 };
+    grid[4] = (WlSlot){ WL_BLOCK_SAND, 1, 0 };
+    grid[6] = (WlSlot){ WL_BLOCK_SAND, 1, 0 };
+    grid[8] = (WlSlot){ WL_BLOCK_SAND, 1, 0 };
+    r = wl_crafting_match(grid, 3);
+    CHECK(r && r->out_item == WL_BLOCK_GLASS && r->out_count == 4);
+
+    /* 2x2 grid cannot make 3-wide recipes */
+    for (int i = 0; i < 9; i++) grid[i] = (WlSlot){ WL_ITEM_NONE, 0, 0 };
+    grid[0] = grid[1] = (WlSlot){ WL_BLOCK_COBBLE, 1, 0 };
+    CHECK(wl_crafting_match(grid, 2) == NULL);
+
+    /* zero-initialized grids (item id 0) also count as empty */
+    memset(grid, 0, sizeof(grid));
+    grid[0] = (WlSlot){ WL_BLOCK_LOG, 1, 0 };
+    r = wl_crafting_match(grid, 2);
+    CHECK(r && r->out_item == WL_BLOCK_PLANKS);
+}
+
+static void test_config(void)
+{
+    WlConfig cfg;
+    wl_config_defaults(&cfg);
+    CHECK(cfg.render_distance == 8 && cfg.vsync && !cfg.msaa);
+
+    const char *path = "tests/.tmp-options.txt";
+    wl_delete_tree(path);
+
+    /* missing file keeps defaults */
+    CHECK(wl_config_load(&cfg, path));
+    CHECK(cfg.render_distance == 8);
+
+    /* bad values get clamped, unknown keys ignored */
+    FILE *f = fopen(path, "w");
+    CHECK(f != NULL);
+    if (f) {
+        fprintf(f, "render_distance = 999\r\n");
+        fprintf(f, "brightness = -5\r\n");
+        fprintf(f, "nonsense_key = 1\r\n");
+        fprintf(f, "vsync = false\r\n");
+        fclose(f);
+    }
+    CHECK(wl_config_load(&cfg, path));
+    CHECK(cfg.render_distance == 16); /* clamped to max */
+    CHECK(cfg.brightness == 0.5f);    /* clamped to min */
+    CHECK(!cfg.vsync);
+
+    /* save + reload roundtrip */
+    cfg.brightness = 1.25f;
+    CHECK(wl_config_save(&cfg, path));
+    WlConfig cfg2;
+    wl_config_defaults(&cfg2);
+    CHECK(wl_config_load(&cfg2, path));
+    CHECK(cfg2.brightness == 1.25f && !cfg2.vsync);
+
+    wl_delete_tree(path);
+}
+
+static void test_keybinds(void)
+{
+    WlKeybinds kb;
+    wl_keybinds_defaults(&kb);
+    CHECK(kb.key[WL_ACT_FORWARD] == KEY_W);
+    CHECK(kb.key[WL_ACT_JUMP] == KEY_SPACE);
+
+    /* key name roundtrip */
+    bool ok = true;
+    for (int k = KEY_A; k <= KEY_Z; k++) {
+        const char *name = wl_key_name(k);
+        if (!name[0] || wl_key_from_name(name) != k) ok = false;
+    }
+    CHECK(ok);
+    CHECK(wl_key_from_name("LEFT SHIFT") == KEY_LEFT_SHIFT);
+    CHECK(wl_key_from_name("left_shift") == KEY_LEFT_SHIFT);
+    CHECK(wl_key_from_name("NO_SUCH_KEY") < 0);
+
+    CHECK(wl_action_from_id("forward") == WL_ACT_FORWARD);
+    CHECK(wl_action_from_id("bogus") == WL_ACT_COUNT);
+}
+
+static void test_world_store(void)
+{
+    const char *dir = "tests/.tmp-world";
+    wl_delete_tree(dir);
+
+    WlWorldMeta meta;
+    memset(&meta, 0, sizeof(meta));
+    wl_scpy(meta.name, "Test World", sizeof(meta.name));
+    meta.seed = 4242;
+    meta.type = WL_WORLDTYPE_STANDARD;
+    meta.gamemode = WL_WORLD_GAMEMODE_CREATIVE;
+    meta.time_ticks = 1234;
+    meta.spawn_x = 1.5f;
+    meta.spawn_y = 70.0f;
+    meta.spawn_z = -2.5f;
+    meta.created_unix = 1000;
+    meta.last_played_unix = 2000;
+    meta.play_seconds = 12.5;
+    meta.format_version = WL_WORLD_FORMAT_VERSION;
+
+    CHECK(wl_store_create_world(dir, &meta));
+
+    /* chunk roundtrip */
+    static uint8_t blocks[WL_CHUNK_VOL], loaded[WL_CHUNK_VOL];
+    for (int i = 0; i < WL_CHUNK_VOL; i++) blocks[i] = (uint8_t)(i % 30);
+    CHECK(wl_store_save_chunk(dir, -5, 9, blocks));
+    memset(loaded, 0, sizeof(loaded));
+    CHECK(wl_store_load_chunk(dir, -5, 9, loaded));
+    CHECK(memcmp(blocks, loaded, sizeof(blocks)) == 0);
+    CHECK(!wl_store_load_chunk(dir, 100, 100, loaded)); /* never saved */
+
+    /* level roundtrip */
+    WlWorldMeta back;
+    CHECK(wl_store_load_level(dir, &back));
+    CHECK(back.seed == 4242 && back.gamemode == WL_WORLD_GAMEMODE_CREATIVE);
+    CHECK(back.time_ticks == 1234);
+    CHECK(back.spawn_z == -2.5f);
+    CHECK(wl_str_eq(back.name, "Test World"));
+
+    wl_delete_tree(dir);
+}
+
+static void test_tiles_contract(void)
+{
+    /* the atlas layout is a save-format contract: never change existing
+     * ids, only append */
+    CHECK(TILE_STONE == 0);
+    CHECK(TILE_DIRT == 1);
+    CHECK(TILE_ICON_APPLE == 39);
+    CHECK(TILE_ICON_SWORD_DIAMOND == 55);
+    CHECK(TILE_BASE_COUNT == 56);
+}
+
+int main(void)
+{
+    test_util();
+    test_rle();
+    test_noise();
+    test_worldgen_determinism();
+    test_registries();
+    test_inventory();
+    test_crafting();
+    test_config();
+    test_keybinds();
+    test_world_store();
+    test_tiles_contract();
+
+    printf("unit tests: %d run, %d failed\r\n", tests_run, tests_failed);
+    return tests_failed ? 1 : 0;
+}

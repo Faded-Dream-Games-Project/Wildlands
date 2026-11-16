@@ -35,6 +35,12 @@ WlBlockId wl_blocks_register(const WlBlock *def)
     return id;
 }
 
+void wl_block_set_drop(WlBlockId id, uint16_t drop_item)
+{
+    if (id == 0 || id >= (WlBlockId)g_block_count) return;
+    g_blocks[id].drop_item = drop_item;
+}
+
 const WlBlock *wl_block_get(WlBlockId id)
 {
     if (id == 0 || id >= g_block_count) return NULL;

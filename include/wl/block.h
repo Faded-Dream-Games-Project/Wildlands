@@ -76,6 +76,9 @@ typedef struct {
 void        wl_blocks_init(void);
 /* Registers a block (used by base init and mods). Returns 0 on failure. */
 WlBlockId  wl_blocks_register(const WlBlock *def);
+/* Post-registration fixup used by the mod loader (drop item may reference
+ * the block's own item id, which is only known after registration). */
+void        wl_block_set_drop(WlBlockId id, uint16_t drop_item);
 const WlBlock *wl_block_get(WlBlockId id);
 int         wl_blocks_count(void);
 
