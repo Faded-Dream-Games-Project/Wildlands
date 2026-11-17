@@ -299,6 +299,7 @@ bool wl_assets_finalize_atlas(WlAssets *a)
                 a->atlas_img.width, a->atlas_img.height, px, px);
     }
 
+    int mod_tiles = a->pending_count;
     for (int i = 0; i < a->pending_count; i++) {
         int col = a->pending[i].tile % WL_ATLAS_GRID;
         int row = a->pending[i].tile / WL_ATLAS_GRID;
@@ -316,11 +317,37 @@ bool wl_assets_finalize_atlas(WlAssets *a)
     a->tex_ok[WL_TEX_ATLAS] = (a->tex[WL_TEX_ATLAS].id != 0);
     SetTextureFilter(a->tex[WL_TEX_ATLAS], TEXTURE_FILTER_POINT);
 
+    /* Minification filtering. POINT sampling without mipmaps aliases
+     * badly once a 16-texel face shrinks below ~16 pixels on screen
+     * (about 30 blocks out at default FOV): every sub-pixel camera move
+     * flips which texels get sampled and distant terrain shimmers and
+     * crawls — the "glitchy textures" symptom. The atlas is a
+     * power-of-two 256px grid of 16px tiles, so mip levels 1..4 average
+     * texels strictly within one tile (16 = 2^4, tile-aligned boxes),
+     * and with NEAREST sampling inside a level the mesher's half-texel
+     * UV inset keeps every sample on the correct tile: no cross-tile
+     * bleeding at any distance. LINEAR blending between levels removes
+     * the shimmer; MAG stays NEAREST so the crisp pixel-art look up
+     * close is unchanged. (faces beyond render distance never exceed
+     * mip 4 in practice, and fog covers that range anyway.) */
+    GenTextureMipmaps(&a->tex[WL_TEX_ATLAS]);
+    if (a->tex[WL_TEX_ATLAS].mipmaps > 1) {
+        rlTextureParameters(a->tex[WL_TEX_ATLAS].id, RL_TEXTURE_MIN_FILTER,
+                            RL_TEXTURE_FILTER_NEAREST_MIP_LINEAR);
+        rlTextureParameters(a->tex[WL_TEX_ATLAS].id, RL_TEXTURE_MAG_FILTER,
+                            RL_TEXTURE_FILTER_NEAREST);
+        WL_LOGD("atlas sampling: %d mip levels, NEAREST mag / "
+                "NEAREST_MIPMAP_LINEAR min", a->tex[WL_TEX_ATLAS].mipmaps);
+    } else {
+        WL_LOGW("atlas mipmaps could not be generated; distant textures "
+                "may shimmer");
+    }
+
     UnloadImage(a->atlas_img);
     a->atlas_img_ok = false;
 
     WL_LOGI("atlas finalized (%d tiles reserved, %d from mods)",
-            a->next_tile, a->pending_count);
+            a->next_tile, mod_tiles);
     return a->tex_ok[WL_TEX_ATLAS];
 }
 

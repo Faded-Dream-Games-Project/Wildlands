@@ -413,6 +413,36 @@ static void test_tile_uv(void)
     CHECK(ok);
 }
 
+static void test_atlas_mip_alignment(void)
+{
+    /* The atlas is minification-filtered (asset_manager.c generates
+     * mipmaps and samples NEAREST inside each level, LINEAR between
+     * levels). That is only bleed-free while every mip box of a tile
+     * stays inside the tile: level k averages 2^k-texel boxes, so the
+     * tile size must be a power of two, and levels 0..log2(tile) are
+     * tile-pure with level log2(tile) collapsing a tile to one texel.
+     * The half-texel UV inset must stay below one mip texel at every
+     * used level so NEAREST always resolves to the tile's own edge
+     * texel, never the neighbour's. */
+    int tile = WL_TILE_PX;
+    CHECK(tile > 0 && (tile & (tile - 1)) == 0);      /* power of two */
+    int atlas = WL_ATLAS_GRID * WL_TILE_PX;
+    CHECK(atlas > 0 && (atlas & (atlas - 1)) == 0);   /* power of two */
+
+    int levels = 0;
+    while ((1 << levels) < tile) levels++;            /* tile -> 1 texel */
+    CHECK(levels >= 4);                               /* 16px -> 4 levels */
+
+    float e = 0.5f / (float)atlas;                    /* UV inset */
+    bool ok = true;
+    for (int k = 0; k <= levels && ok; k++) {
+        float mip_px = (float)atlas / (float)(1 << k); /* atlas px @ level k */
+        if (!(e * mip_px < 1.0f)) ok = false;          /* inset < 1 mip texel */
+        if (!((float)tile / (float)(1 << k) >= 1.0f)) ok = false;
+    }
+    CHECK(ok);
+}
+
 static void test_frustum(void)
 {
     /* identity-ish view: camera at the origin looking down -Z, up +Y.
@@ -515,6 +545,7 @@ int main(void)
     test_world_store();
     test_tiles_contract();
     test_tile_uv();
+    test_atlas_mip_alignment();
     test_frustum();
     test_textfield_edit();
 

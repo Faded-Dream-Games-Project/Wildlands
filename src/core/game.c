@@ -499,6 +499,13 @@ static void run_selftest(WlGame *g)
     selftest_check(g, "chunks generated", st.generated > 50);
     selftest_check(g, "chunks meshed", st.meshed > 20);
 
+    /* 1b. atlas is minification-filtered: without mipmaps, faces past
+     * ~30 blocks sample below one texel per pixel and the terrain
+     * shimmers on every camera move (regression guard) */
+    Texture2D atlas_tex = wl_assets_tex(g->assets, WL_TEX_ATLAS);
+    selftest_check(g, "atlas mipmapped for distance sampling",
+                   atlas_tex.id != 0 && atlas_tex.mipmaps > 1);
+
     /* 2. gravity + landing */
     p->pos.y += 6.0f;
     p->vel = (Vector3){ 0 };
