@@ -34,6 +34,10 @@ void wl_menu_settings(WlGame *g)
     int sw = GetScreenWidth();
     wl_ui_dim(0.5f);
 
+    /* ESC must not navigate back while it is being captured as the
+     * "cancel rebinding" key below */
+    bool rebinding_at_entry = (g->rebinding_action >= 0);
+
     WlConfig *c = &g->cfg;
 
     Font tf = wl_ui_title_font(&g->ui);
@@ -248,6 +252,15 @@ void wl_menu_settings(WlGame *g)
     /* footer buttons */
     Rectangle b = { panel.x + 16, panel.y + ph - 60 * g->ui.scale,
                     (pw - 64 * g->ui.scale) / 4, 46 * g->ui.scale };
+    /* ESC behaves like Cancel: revert pending changes and go back to
+     * wherever the settings were opened from (menu or pause screen) */
+    if (wl_game_key_pressed(g, KEY_ESCAPE) && !rebinding_at_entry) {
+        g->cfg = g->cfg_entry;
+        wl_game_apply_settings(g);
+        g->state = g->settings_return;
+        if (g->state == WL_STATE_PLAYING) DisableCursor();
+        return;
+    }
     if (wl_ui_button(&g->ui, b, "Done")) {
         wl_config_validate(&g->cfg);
         wl_game_save_config(g);

@@ -59,6 +59,8 @@ typedef struct WlGame {
     double session_start;
     double autosave_timer;
     int load_initial_pending;
+    bool last_save_failed;    /* most recent session save reported failure */
+    char gpu_info[160];       /* vendor / renderer / GL version (debug) */
 
     /* HUD */
     float item_toast;       /* seconds remaining to show the held item name */
@@ -95,6 +97,12 @@ typedef struct WlGame {
     int demo_gamemode;
     int demo_type;
     int demo_width, demo_height;
+    /* scripted camera motion (--lookspin/--looknod): synthetic mouse-look
+     * deltas each frame; used to reproduce movement-triggered rendering
+     * artifacts in automated runs */
+    float demo_lookspin;      /* yaw degrees per frame */
+    float demo_looknod;       /* pitch oscillation amplitude, degrees */
+    bool demo_walk;           /* hold Walk Forward (--walk) */
     /* test automation: run menus without a world, open an inventory overlay */
     bool demo_menu;
     char demo_start_menu[16];   /* "" | world select | create | settings */
@@ -109,12 +117,16 @@ typedef struct WlGame {
 
     /* UI runtime test (--uitest settings|create): scripted pointer driver
      * over the real menus, with logged assertions */
-    int uitest;                 /* 0 none, 1 settings, 2 create */
+    int uitest;                 /* 0 none, 1 settings, 2 create, 3 pause */
     int uitest_phase;
     int uitest_wait;
     bool uitest_failed;
     WlConfig uitest_cfg;        /* snapshot, restored when the test ends */
     char uitest_shot[WL_PATH_MAX]; /* screenshot taken mid-frame when set */
+
+    /* test seam: one synthetic key press, consumed by wl_game_key_pressed
+     * (lets scripted tests press ESC etc. through the real handlers) */
+    int inject_key;
 
     /* startup diagnostics */
     double init_started_ms;     /* CLOCK_MONOTONIC at init begin */
@@ -143,13 +155,24 @@ void wl_game_run_frame(WlGame *g);
 
 /* World session lifecycle. */
 bool wl_game_enter_world(WlGame *g, const WlWorldEntry *entry);
-void wl_game_exit_world(WlGame *g);
-void wl_game_save_session(WlGame *g);
+/* Saves the session, then unloads the world and returns to the title.
+ * Returns false (and KEEPS the world session) when saving failed, so
+ * progress is never silently discarded. */
+bool wl_game_exit_world(WlGame *g);
+/* Saves the session; returns false when the save failed. */
+bool wl_game_save_session(WlGame *g);
+/* Save-then-quit via the normal shutdown path; returns false (and keeps
+ * the game open) when the save failed. */
+bool wl_game_quit_to_desktop(WlGame *g);
 
 /* Applies window/audio/world-affecting settings right now. */
 void wl_game_apply_settings(WlGame *g);
 
 /* Saves config + keybindings to disk. */
 void wl_game_save_config(WlGame *g);
+
+/* True when this key was physically pressed this frame or injected by a
+ * test (--uitest). Consumes a pending injection. */
+bool wl_game_key_pressed(WlGame *g, int key);
 
 #endif /* WL_GAME_H */

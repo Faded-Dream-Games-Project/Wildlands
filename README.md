@@ -24,6 +24,10 @@ identity. Build, explore, survive, and create.
 - **Survival & creative** — mining with tool tiers and durability, block
   placement rules, health/hunger/drowning, fall damage, death & respawn,
   20-minute day/night cycle, creative flight.
+- **Pause menu** — Esc pauses (never quits): the world freezes behind a
+  dimmed panel with Resume Game, Options (returns to the pause menu),
+  Save and Quit to Title, and Quit to Desktop. Failed saves are reported
+  on screen and never silently discard progress.
 - **Inventory & crafting** — 36-slot inventory with drag & drop, 2×2 pocket
   grid and 3×3 crafting table, shaped (mirrored), shapeless and
   ingredient-group recipes.
@@ -48,7 +52,7 @@ make            # release build  -> bin/wildlands
 make debug      # debug build    -> bin/wildlands_debug
 make asan       # AddressSanitizer build
 make run        # build + run (auto-starts Xvfb when no display is present)
-make test       # build + run the unit tests (176 checks)
+make test       # build + run the unit tests (191 checks)
 make selftest   # build + run the in-game runtime self test
 make mods       # build the example mod (mods/example_mod/mod.so)
 make assets     # regenerate original assets (dev only, needs Python+Pillow)
@@ -66,9 +70,20 @@ The game creates its runtime directories (`worlds/`, `mods/`, `config/`,
 Menus with more content than fits (settings at small window sizes or UI
 scales, world creation) scroll with the mouse wheel; open dropdown lists
 render above all other controls and swallow clicks inside them. The UI
-runtime test (`./bin/wildlands --uitest settings` / `--uitest create`)
-drives the real menus with a scripted pointer and verifies focus, typing,
-scrolling, dropdown layering and world creation end to end.
+runtime test (`./bin/wildlands --uitest settings` / `--uitest create` /
+`--uitest pause`) drives the real menus with a scripted pointer and
+verifies focus, typing, scrolling, dropdown layering, world creation and
+the full pause flow (Esc pause/resume, frozen simulation, Options
+round-trip, Save and Quit to Title, Quit to Desktop) end to end.
+
+`tools/repro_render.sh` and `tools/verify_battery.sh` reproduce and
+regression-test the render pipeline against camera-motion artifacts
+(stale depth buffer): each renders the same final camera pose after
+static vs. rotating runs and compares the frames. Two environment
+switches aid debugging: `WL_GL_TRACE=1` logs GL errors per render pass
+(plus the GPU vendor/renderer/version is always logged at startup and in
+the F3 overlay), and `WL_NO_DEPTHCLEAR=1` restores the pre-fix render
+behaviour for A/B testing.
 
 ### Command line
 
@@ -79,7 +94,11 @@ wildlands [--world <name>] [--seed <n>] [--gamemode survival|creative]
 ```
 
 `--frames` runs a headless-friendly demo (used by the automated smoke
-tests) that exits after N played frames.
+tests) that exits after N played frames. Test automation additions:
+`--lookspin <deg>` (rotate the camera every frame), `--looknod <deg>`
+(oscillate the pitch), and `--walk` (hold Walk Forward) exist so scripted
+runs can exercise camera-motion-dependent rendering through the real
+mouse-look and movement paths.
 
 ## Controls (defaults — rebindable in Settings → Controls)
 

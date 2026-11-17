@@ -36,8 +36,18 @@ typedef struct WlRenderer {
     bool cloud_ok;
 
     int drawn_chunks;
+    int visible_chunks; /* frustum-visible (drawn + fog-skipped) */
     long drawn_tris;
 } WlRenderer;
+
+/* Poll glGetError() and log it once per (site, error) pair. Enabled by the
+ * WL_GL_TRACE environment variable; a no-op (single branch) otherwise, so
+ * shipping builds pay nothing. */
+void wl_renderer_gl_check(const char *site);
+
+/* GPU description ("vendor / renderer / GL x.y"), filled after window
+ * creation. Valid until the next call; empty string before that. */
+const char *wl_renderer_gpu_info(void);
 
 void wl_renderer_init(WlRenderer *r, WlAssets *assets);
 void wl_renderer_shutdown(WlRenderer *r);

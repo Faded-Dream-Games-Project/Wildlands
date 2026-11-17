@@ -38,4 +38,9 @@ const char *wl_key_name(int key);         /* "" when unknown */
 int         wl_key_from_name(const char *name); /* -1 when unknown */
 bool        wl_key_is_bindable(int key);
 
+/* Is the action's key currently held? (physical state or a debug hold) */
+bool        wl_keybinds_down(const WlKeybinds *kb, WlAction action);
+/* Test seam: force an action's held state (used by --walk automation). */
+void        wl_keybinds_debug_hold(WlAction action, bool held);
+
 #endif /* WL_KEYBINDS_H */

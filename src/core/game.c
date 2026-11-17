@@ -44,6 +44,15 @@ static void parse_args(WlGame *g, int argc, char **argv)
             g->demo_width = atoi(argv[++i]);
         } else if (wl_str_eq(argv[i], "--height") && i + 1 < argc) {
             g->demo_height = atoi(argv[++i]);
+        } else if (wl_str_eq(argv[i], "--lookspin") && i + 1 < argc) {
+            /* scripted camera rotation (degrees of yaw per frame) */
+            g->demo_lookspin = (float)atof(argv[++i]);
+        } else if (wl_str_eq(argv[i], "--looknod") && i + 1 < argc) {
+            /* scripted pitch oscillation amplitude in degrees */
+            g->demo_looknod = (float)atof(argv[++i]);
+        } else if (wl_str_eq(argv[i], "--walk")) {
+            /* hold Walk Forward (pairs with --lookspin/--looknod) */
+            g->demo_walk = true;
         } else if (wl_str_eq(argv[i], "--menu") && i + 1 < argc) {
             /* test automation: show a menu for --frames, no world needed */
             g->demo_menu = true;
@@ -53,7 +62,8 @@ static void parse_args(WlGame *g, int argc, char **argv)
         } else if (wl_str_eq(argv[i], "--selftest")) {
             g->selftest = true;
         } else if (wl_str_eq(argv[i], "--uitest") && i + 1 < argc) {
-            g->uitest = wl_str_eq(argv[++i], "create") ? 2 : 1;
+            const char *s = argv[++i];
+            g->uitest = wl_str_eq(s, "create") ? 2 : (wl_str_eq(s, "pause") ? 3 : 1);
         } else if (wl_str_eq(argv[i], "--yaw") && i + 1 < argc) {
             g->demo_dir_set = true;
             g->demo_yaw = (float)atof(argv[++i]) * 0.017453293f;
@@ -72,10 +82,13 @@ static void parse_args(WlGame *g, int argc, char **argv)
                    "  --frames <n>          demo mode: exit after n frames\n"
                    "  --screenshot <path>   save a screenshot when exiting\n"
                    "  --width/--height <n>  window size override\n"
+                   "  --lookspin <deg>      test: rotate yaw by deg per frame\n"
+                   "  --looknod <deg>       test: oscillate pitch by +-deg\n"
+                   "  --walk                test: hold Walk Forward\n"
                    "  --menu <screen>       test: show menu (main|worlds|create|settings)\n"
                    "  --overlay <inv|craft> test: open the inventory overlay in-world\n"
                    "  --selftest            runtime self test: mine/place/save/exit\n"
-                   "  --uitest <s>          UI test: settings | create\n"
+                   "  --uitest <s>          UI test: settings | create | pause\n"
                    "  --yaw/--pitch <deg>   demo camera direction at world entry\n",
                    WL_VERSION_STRING);
             exit(0);
@@ -169,6 +182,7 @@ bool wl_game_init(WlGame *g, int argc, char **argv)
     t = stage_mark();
 
     /* --- 3. configuration + keybindings --- */
+    int user_w = 0, user_h = 0; /* user's saved window size (demo restore) */
     char cfgpath[WL_PATH_MAX], kbpath[WL_PATH_MAX];
     wl_path_config(cfgpath, sizeof(cfgpath), "options.txt");
     wl_path_config(kbpath, sizeof(kbpath), "keybindings.txt");
@@ -180,6 +194,10 @@ bool wl_game_init(WlGame *g, int argc, char **argv)
     if (!wl_file_exists(kbpath)) wl_keybinds_save(&g->keys, kbpath);
 
     if (g->demo_width > 0 && g->demo_height > 0) {
+        /* --width/--height is a session-only override for the window;
+         * the user's saved resolution must not be clobbered on save */
+        user_w = g->cfg.window_width;
+        user_h = g->cfg.window_height;
         g->cfg.window_width = g->demo_width;
         g->cfg.window_height = g->demo_height;
     }
@@ -216,6 +234,19 @@ bool wl_game_init(WlGame *g, int argc, char **argv)
         return false;
     }
     if (g->cfg.borderless) SetWindowState(FLAG_WINDOW_UNDECORATED);
+    /* the window keeps the demo size for this session, but the config
+     * (and everything saved from it) keeps the user's resolution */
+    if (user_w > 0 && user_h > 0) {
+        g->cfg.window_width = user_w;
+        g->cfg.window_height = user_h;
+    }
+    /* ESC is the pause key, not the quit key: raylib's default exit key is
+     * ESC and would make WindowShouldClose() kill the whole game the
+     * moment the player pauses. Unbind it; the window's close button and
+     * the menus still quit through the normal paths. */
+    SetExitKey(KEY_NULL);
+    /* log the actual GL device once (vendor / renderer / version) */
+    wl_scpy(g->gpu_info, wl_renderer_gpu_info(), sizeof(g->gpu_info));
     SetTargetFPS((unsigned)effective_fps_limit(&g->cfg));
     WL_LOGI("frame pacing: vsync=%s, fps limit=%s (%d fps)",
             g->cfg.vsync ? "on" : "off",
@@ -253,12 +284,21 @@ bool wl_game_init(WlGame *g, int argc, char **argv)
 
     /* --- 8. entry point for demos/tests --- */
     if (g->uitest) {
-        g->demo_menu = true;
-        wl_scpy(g->demo_start_menu, g->uitest == 2 ? "create" : "settings",
-                sizeof(g->demo_start_menu));
+        if (g->uitest == 3) {
+            /* pause-flow test: enters a world through the normal --world
+             * path and drives ESC / buttons over the real menus */
+            if (g->demo_world[0] == '\0')
+                wl_scpy(g->demo_world, "PauseUITest", sizeof(g->demo_world));
+            wl_worlds_delete("PauseUITest"); /* always start fresh */
+        } else {
+            g->demo_menu = true;
+            wl_scpy(g->demo_start_menu, g->uitest == 2 ? "create" : "settings",
+                    sizeof(g->demo_start_menu));
+        }
         g->uitest_cfg = g->cfg; /* restored when the UI test finishes */
         if (g->uitest == 2) wl_worlds_delete("My World"); /* reproducible */
         WL_LOGI("UITEST: begin (%s)",
+                g->uitest == 3 ? "pause menu" :
                 g->uitest == 2 ? "world creation" : "settings menu");
     }
     if (g->demo_menu) {
@@ -453,24 +493,47 @@ bool wl_game_enter_world(WlGame *g, const WlWorldEntry *entry)
     return true;
 }
 
-void wl_game_save_session(WlGame *g)
+bool wl_game_save_session(WlGame *g)
 {
-    if (!g->world) return;
+    if (!g->world) return true; /* nothing to save is not a failure */
     double now = GetTime();
-    wl_worlds_save_session(g->world, &g->player, g->spawn, now - g->session_start);
+    bool ok = wl_worlds_save_session(g->world, &g->player, g->spawn,
+                                     now - g->session_start);
+    if (!ok) {
+        g->last_save_failed = true;
+        WL_LOGE("session save FAILED for world '%s' (progress may be lost; "
+                "check disk space and permissions)",
+                wl_world_name(g->world));
+    } else {
+        g->last_save_failed = false;
+    }
     g->session_start = now;
+    return ok;
 }
 
-void wl_game_exit_world(WlGame *g)
+bool wl_game_exit_world(WlGame *g)
 {
-    if (!g->world) return;
-    wl_game_save_session(g);
+    if (!g->world) return true;
+    /* save first; on failure keep the session open so the player can see
+     * the error and retry instead of silently losing progress */
+    if (!wl_game_save_session(g)) return false;
     wl_world_destroy(g->world);
     g->world = NULL;
     g->state = WL_STATE_MAIN_MENU;
     g->overlay = WL_OVERLAY_NONE;
     EnableCursor();
     wl_audio_stop_music(&g->audio);
+    return true;
+}
+
+bool wl_game_quit_to_desktop(WlGame *g)
+{
+    /* save the session, then leave through the normal shutdown path
+     * (config save, asset/audio/world teardown, window close); if the
+     * save fails the game stays open and the error is reported */
+    if (!wl_game_save_session(g)) return false;
+    g->quit = true;
+    return true;
 }
 
 /* ------------------------------------------------------------------ */
@@ -890,10 +953,184 @@ static void uitest_create(WlGame *g)
     }
 }
 
+/* --uitest pause: drives ESC + the pause-menu buttons through the real
+ * handlers: open/close via ESC and Resume, simulation freeze while
+ * paused, Options round-trip (world kept), Save and Quit to Title. */
+
+/* center Y of pause-menu button i, mirroring wl_menu_pause()'s layout */
+static float uitest_pause_btn_y(const WlGame *g, int i)
+{
+    float s = g->ui.scale;
+    float btn = 46.0f * s, gap = 12.0f * s, pad = 24.0f * s;
+    float py = GetScreenHeight() * 0.30f;
+    return py + pad + i * (btn + gap) + btn / 2;
+}
+
+static void uitest_pause(WlGame *g)
+{
+    float s = g->ui.scale;
+    int sw = GetScreenWidth(), sh = GetScreenHeight();
+    /* mirrors wl_menu_pause() geometry */
+    float pw = 380.0f * s;
+    float px = (sw - pw) / 2;
+    float bx = px + pw / 2;
+    float by0 = uitest_pause_btn_y(g, 0);
+    static uint32_t t0 = 0;
+    static Vector3 p0 = { 0 };
+
+    switch (g->uitest_phase) {
+    case 0: /* wait for the world to finish streaming */
+        wl_ui_debug_input(true, 0, 0, false, false, 0, NULL);
+        if (g->state == WL_STATE_PLAYING || ++g->uitest_wait > 900) {
+            uitest_check(g, "world enters playing", g->state == WL_STATE_PLAYING);
+            uitest_check(g, "cursor captured while playing", IsCursorHidden());
+            g->inject_key = g->keys.key[WL_ACT_PAUSE]; /* ESC pauses */
+            g->uitest_phase = 1;
+        }
+        break;
+    case 1: /* the pause menu must be up, cursor visible, world frozen */
+        uitest_check(g, "ESC opens the pause menu", g->state == WL_STATE_PAUSED);
+        uitest_check(g, "cursor shown while paused", !IsCursorHidden());
+        uitest_check(g, "ESC did not close the game", !g->quit);
+        t0 = wl_world_time(g->world);
+        p0 = g->player.pos;
+        wl_scpy(g->uitest_shot, "/tmp/uitest-pause-menu.png", sizeof(g->uitest_shot));
+        wl_ui_debug_input(true, bx, by0, true, true, 0, NULL); /* Resume */
+        g->uitest_phase = 2;
+        break;
+    case 2:
+        uitest_check(g, "Resume Game returns to playing",
+                     g->state == WL_STATE_PLAYING);
+        uitest_check(g, "cursor recaptured on resume", IsCursorHidden());
+        g->inject_key = g->keys.key[WL_ACT_PAUSE];
+        wl_ui_debug_input(true, 0, 0, false, false, 0, NULL);
+        g->uitest_phase = 3;
+        break;
+    case 3: /* paused again; the simulation must be frozen for a while */
+        uitest_check(g, "ESC re-opens the pause menu", g->state == WL_STATE_PAUSED);
+        wl_ui_debug_input(true, 0, 0, false, false, 0, NULL);
+        if (++g->uitest_wait > 30) {
+            uitest_check(g, "world time frozen while paused",
+                         wl_world_time(g->world) == t0);
+            uitest_check(g, "player frozen while paused",
+                         g->player.pos.x == p0.x && g->player.pos.y == p0.y &&
+                         g->player.pos.z == p0.z);
+            g->inject_key = g->keys.key[WL_ACT_PAUSE]; /* ESC resumes */
+            g->uitest_phase = 4;
+        }
+        break;
+    case 4:
+        uitest_check(g, "ESC resumes from pause", g->state == WL_STATE_PLAYING);
+        g->inject_key = g->keys.key[WL_ACT_PAUSE];
+        wl_ui_debug_input(true, 0, 0, false, false, 0, NULL);
+        g->uitest_phase = 5;
+        break;
+    case 5: /* open Options from the pause menu */
+        uitest_check(g, "pause menu up again", g->state == WL_STATE_PAUSED);
+        wl_ui_debug_input(true, bx, uitest_pause_btn_y(g, 1), true, true, 0, NULL); /* Options */
+        g->uitest_phase = 6;
+        break;
+    case 6: /* settings open over the kept world session */
+        uitest_check(g, "Options opens settings", g->state == WL_STATE_SETTINGS);
+        uitest_check(g, "world kept while in options", g->world != NULL);
+        { /* click the settings Done button (mirrors wl_menu_settings) */
+            float spw = 640.0f * s, sph = 520.0f * s;
+            float max_ph = (float)sh - 76.0f * s - 8;
+            if (sph > max_ph) sph = max_ph;
+            float dx = (sw - spw) / 2 + 16.0f + (spw - 64.0f * s) / 4 / 2;
+            float dy = 76.0f * s + sph - 60.0f * s + 23.0f * s;
+            wl_ui_debug_input(true, dx, dy, true, true, 0, NULL);
+        }
+        g->uitest_phase = 7;
+        break;
+    case 7: /* Done must return to the pause menu, not the title */
+        uitest_check(g, "Done returns to the pause menu", g->state == WL_STATE_PAUSED);
+        uitest_check(g, "world still loaded after options", g->world != NULL);
+        wl_ui_debug_input(true, bx, uitest_pause_btn_y(g, 2), true, true, 0, NULL); /* Save+Quit */
+        g->uitest_phase = 8;
+        break;
+    case 8: /* saved, unloaded, back on the title screen */
+        uitest_check(g, "Save and Quit to Title returns to the main menu",
+                     g->state == WL_STATE_MAIN_MENU && g->world == NULL);
+        uitest_check(g, "session save succeeded", !g->last_save_failed);
+        if (g->state != WL_STATE_MAIN_MENU || g->world != NULL) {
+            /* save failed: the session must have been KEPT (not silently
+             * discarded) — that is the behaviour under test */
+            uitest_check(g, "failed save keeps the world session", g->world != NULL);
+            uitest_finish(g);
+            break;
+        }
+        {
+            char path[WL_PATH_MAX], wdir[WL_PATH_MAX];
+            bool files = wl_worlds_dir_path(wdir, sizeof(wdir), "PauseUITest") &&
+                         wl_path_join(path, sizeof(path), wdir, "level.dat") &&
+                         wl_file_exists(path);
+            files = files && wl_path_join(path, sizeof(path), wdir, "player.dat") &&
+                    wl_file_exists(path);
+            uitest_check(g, "pause quit wrote session files", files);
+        }
+        /* re-enter for the Quit to Desktop leg */
+        if (wl_game_enter_world(g, &g->entry)) {
+            g->uitest_wait = 0;
+            g->uitest_phase = 9;
+        } else {
+            uitest_check(g, "re-enter world for quit test", false);
+            uitest_finish(g);
+        }
+        break;
+    case 9: /* wait for the re-entered world */
+        wl_ui_debug_input(true, 0, 0, false, false, 0, NULL);
+        if (g->state == WL_STATE_PLAYING || ++g->uitest_wait > 900) {
+            uitest_check(g, "world re-enters playing", g->state == WL_STATE_PLAYING);
+            g->inject_key = g->keys.key[WL_ACT_PAUSE];
+            g->uitest_phase = 10;
+        }
+        break;
+    case 10:
+        uitest_check(g, "pause menu up for quit test", g->state == WL_STATE_PAUSED);
+        wl_ui_debug_input(true, bx, uitest_pause_btn_y(g, 3), true, true, 0, NULL);
+        g->uitest_phase = 11;
+        break;
+    /* phase 11 is verified post-dispatch by uitest_pause_quit_checks():
+     * the Quit to Desktop button sets g->quit during the frame, so the
+     * main loop would exit before this driver ran again */
+    default:
+        uitest_finish(g);
+        break;
+    }
+}
+
+/* Quit-to-desktop leg, checked right after the button fired this frame */
+static void uitest_pause_quit_checks(WlGame *g)
+{
+    g->uitest_phase = 12; /* one shot */
+    uitest_check(g, "Quit to Desktop saved the session", !g->last_save_failed);
+    uitest_check(g, "Quit to Desktop requests shutdown", g->quit);
+    {
+        char path[WL_PATH_MAX], wdir[WL_PATH_MAX];
+        bool files = wl_worlds_dir_path(wdir, sizeof(wdir), "PauseUITest") &&
+                     wl_path_join(path, sizeof(path), wdir, "player.dat") &&
+                     wl_file_exists(path);
+        uitest_check(g, "quit-to-desktop wrote player data", files);
+    }
+    uitest_finish(g);
+}
+
 static void uitest_frame(WlGame *g)
 {
-    if (g->uitest == 2) uitest_create(g);
+    if (g->uitest == 3) uitest_pause(g);
+    else if (g->uitest == 2) uitest_create(g);
     else uitest_settings(g);
+}
+
+bool wl_game_key_pressed(WlGame *g, int key)
+{
+    if (IsKeyPressed(key)) return true;
+    if (key > 0 && g->inject_key == key) {
+        g->inject_key = 0; /* one shot */
+        return true;
+    }
+    return false;
 }
 
 /* ------------------------------------------------------------------ */
@@ -991,7 +1228,7 @@ static void play_frame(WlGame *g)
     }
 
     /* global keys */
-    if (IsKeyPressed(g->keys.key[WL_ACT_PAUSE])) {
+    if (wl_game_key_pressed(g, g->keys.key[WL_ACT_PAUSE])) {
         if (overlay_open) {
             wl_inv_ui_close(g);
             DisableCursor();
@@ -1048,10 +1285,30 @@ static void play_frame(WlGame *g)
 
         Vector2 md = GetMouseDelta();
         wl_player_apply_look(p, md.x, md.y);
+
+        /* scripted camera motion (--lookspin/--looknod): synthetic deltas
+         * through the real mouse-look path, so automated runs reproduce
+         * movement-triggered rendering behavior exactly */
+        if (g->demo_lookspin != 0.0f || g->demo_looknod != 0.0f) {
+            float sens = 0.0022f * g->cfg.mouse_sensitivity;
+            if (sens < 0.0001f) sens = 0.0001f;
+            if (g->demo_lookspin != 0.0f) {
+                float rad = g->demo_lookspin * 0.017453293f;
+                wl_player_apply_look(p, -rad / sens, 0.0f);
+            }
+            if (g->demo_looknod != 0.0f) {
+                /* pitch oscillates +-amp: the per-frame delta is the
+                 * derivative d/dt[amp*cos(2*pi*t/period)] */
+                float t = (float)(g->demo_frames % 120) * 0.0523599f; /* 6° steps */
+                float rad = -sinf(t) * g->demo_looknod * 0.017453293f * 0.10472f;
+                wl_player_apply_look(p, 0.0f, -rad / sens);
+            }
+        }
     }
     if (g->item_toast > 0.0f) g->item_toast -= dt;
 
     /* simulation */
+    if (g->demo_walk) wl_keybinds_debug_hold(WL_ACT_FORWARD, true);
     wl_player_update(p, g->world, &g->keys, &g->cfg, &g->audio, dt, input_active,
                      wl_world_gamemode(g->world));
     if (!p->dead) {
@@ -1090,10 +1347,11 @@ static void play_frame(WlGame *g)
         static int diag = 0;
         if (diag++ % 30 == 0) {
             WlWorldStats st = wl_world_stats(g->world);
-            WL_LOGD("demo pos %.1f,%.1f,%.1f drawn %d tris %ld pending %d | "
+            WL_LOGD("demo pos %.1f,%.1f,%.1f yaw %.2f pitch %.2f drawn %d tris %ld pending %d | "
                     "%.0f fps, %.2f ms avg, worst %.1f ms, rss %d MiB | "
                     "gen %d chks %.2f ms avg, mesh %.2f ms avg",
-                    p->pos.x, p->pos.y, p->pos.z, g->rend.drawn_chunks,
+                    p->pos.x, p->pos.y, p->pos.z, p->yaw, p->pitch,
+                    g->rend.drawn_chunks,
                     g->rend.drawn_tris,
                     wl_world_pending(g->world, p->pos.x, p->pos.z),
                     (float)GetFPS(), g->ft_ema_ms, g->ft_worst_ms,
@@ -1116,6 +1374,7 @@ static void paused_frame(WlGame *g)
                            g->player.head_in_water);
     wl_hud_draw(g);
     wl_menu_pause(g);
+    uitest_maybe_shot(g);
     EndDrawing();
     wl_audio_update(&g->audio, GetFrameTime(), wl_world_time(g->world), false);
 }
@@ -1170,6 +1429,12 @@ void wl_game_run_frame(WlGame *g)
     case WL_STATE_PAUSED:       paused_frame(g); break;
     default:                    g->state = WL_STATE_MAIN_MENU; break;
     }
+    g->inject_key = 0; /* drop injections no handler consumed this frame */
+
+    /* pause-uitest quit leg: the button fires during dispatch above and
+     * sets g->quit, so the main loop would exit before the driver could
+     * observe it — verify here, same frame */
+    if (g->uitest == 3 && g->uitest_phase == 11) uitest_pause_quit_checks(g);
 
     wl_ui_end(&g->ui);
 

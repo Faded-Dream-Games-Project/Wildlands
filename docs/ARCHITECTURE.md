@@ -86,6 +86,15 @@ wl_game_run_frame
   (Gribb-Hartmann), positive-vertex AABB test per chunk.
 - Water is a translucent second pass with depth writes disabled; cutout
   blocks (plants, leaves, glass) live in the opaque pass with alpha-discard.
+- The frame's color *and depth* buffers are cleared at the top of
+  `wl_renderer_draw_world` (raylib `ClearBackground` clears both). The sky
+  is then painted as a 2D gradient quad, which writes no depth — so without
+  the clear the depth buffer keeps the previous frame's terrain depths and
+  any fragment that becomes farther than its stale value is discarded by
+  the `GL_LEQUAL` test once the camera moves. That was the "blocks turn
+  white / untextured after moving the mouse" bug; `WL_NO_DEPTHCLEAR=1`
+  restores the old behaviour for A/B regression runs
+  (`tools/repro_render.sh`, `tools/verify_battery.sh`).
 
 ## Persistence
 

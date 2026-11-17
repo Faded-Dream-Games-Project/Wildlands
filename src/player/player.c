@@ -294,13 +294,13 @@ void wl_player_update(WlPlayer *p, WlWorld *w, const WlKeybinds *kb,
     bool want_forward = false, want_back = false, want_left = false, want_right = false;
     bool want_jump = false, want_sneak = false, want_sprint = false;
     if (input_active) {
-        want_forward = IsKeyDown(kb->key[WL_ACT_FORWARD]);
-        want_back = IsKeyDown(kb->key[WL_ACT_BACK]);
-        want_left = IsKeyDown(kb->key[WL_ACT_LEFT]);
-        want_right = IsKeyDown(kb->key[WL_ACT_RIGHT]);
-        want_jump = IsKeyDown(kb->key[WL_ACT_JUMP]);
-        want_sneak = IsKeyDown(kb->key[WL_ACT_SNEAK]);
-        want_sprint = IsKeyDown(kb->key[WL_ACT_SPRINT]);
+        want_forward = wl_keybinds_down(kb, WL_ACT_FORWARD);
+        want_back = wl_keybinds_down(kb, WL_ACT_BACK);
+        want_left = wl_keybinds_down(kb, WL_ACT_LEFT);
+        want_right = wl_keybinds_down(kb, WL_ACT_RIGHT);
+        want_jump = wl_keybinds_down(kb, WL_ACT_JUMP);
+        want_sneak = wl_keybinds_down(kb, WL_ACT_SNEAK);
+        want_sprint = wl_keybinds_down(kb, WL_ACT_SPRINT);
 
         /* double-tap jump toggles flying (creative only) */
         if (gamemode == WL_WORLD_GAMEMODE_CREATIVE && IsKeyPressed(kb->key[WL_ACT_JUMP])) {

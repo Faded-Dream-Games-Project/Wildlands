@@ -17,6 +17,7 @@
 #include "wl/mesher.h"
 #include "wl/frustum.h"
 #include "wl/ui.h"
+#include "wl/game.h" /* wl_game_key_pressed input seam */
 #include "raylib.h" /* key codes for keybind roundtrip */
 #include "raymath.h"
 
@@ -531,6 +532,37 @@ static void test_textfield_edit(void)
     CHECK(!changed && strlen(buf) == 15);
 }
 
+/* pause/input seams: injected key presses must behave exactly like real
+ * ones for the handlers that consume them (one shot, right key only) */
+static void test_input_seams(void)
+{
+    WlGame g;
+    memset(&g, 0, sizeof(g));
+
+    g.inject_key = KEY_ENTER;
+    CHECK(wl_game_key_pressed(&g, KEY_ENTER));       /* injected press */
+    CHECK(!wl_game_key_pressed(&g, KEY_ENTER));      /* consumed */
+    CHECK(!wl_game_key_pressed(&g, KEY_SPACE));      /* nothing pending */
+
+    g.inject_key = KEY_ENTER;
+    CHECK(!wl_game_key_pressed(&g, KEY_SPACE));      /* other key: untouched */
+    CHECK(g.inject_key == KEY_ENTER);                /* still pending */
+    CHECK(wl_game_key_pressed(&g, KEY_ENTER));
+
+    g.inject_key = 0;
+    CHECK(!wl_game_key_pressed(&g, KEY_ESCAPE));     /* no physical keys in tests */
+
+    /* held-key seam used by --walk */
+    WlKeybinds kb;
+    wl_keybinds_defaults(&kb);
+    CHECK(!wl_keybinds_down(&kb, WL_ACT_FORWARD));
+    wl_keybinds_debug_hold(WL_ACT_FORWARD, true);
+    CHECK(wl_keybinds_down(&kb, WL_ACT_FORWARD));
+    CHECK(!wl_keybinds_down(&kb, WL_ACT_BACK));
+    wl_keybinds_debug_hold(WL_ACT_FORWARD, false);
+    CHECK(!wl_keybinds_down(&kb, WL_ACT_FORWARD));
+}
+
 int main(void)
 {
     test_util();
@@ -548,6 +580,7 @@ int main(void)
     test_atlas_mip_alignment();
     test_frustum();
     test_textfield_edit();
+    test_input_seams();
 
     printf("unit tests: %d run, %d failed\r\n", tests_run, tests_failed);
     return tests_failed ? 1 : 0;

@@ -8,11 +8,16 @@
 #include "wl/log.h"
 
 #include <math.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include "raylib.h"
 #include "raymath.h"
 #include "rlgl.h"
+/* direct GL access for the opt-in diagnostics above (vendor log + error
+ * trace); glad declarations are provided by the vendored raylib build */
+#include "external/glad.h"
+#include "wl/util.h"
 
 /* ------------------------------------------------------------------ */
 /* sky keyframes                                                       */
@@ -107,6 +112,51 @@ static bool chunk_beyond_fog(const WlRenderer *r, int cx, int cz)
 /* ------------------------------------------------------------------ */
 /* lifecycle                                                           */
 /* ------------------------------------------------------------------ */
+
+/* ---- opt-in GL diagnostics (WL_GL_TRACE=1) ------------------------ */
+
+static bool gl_trace_enabled(void)
+{
+    static int enabled = -1;
+    if (enabled < 0) {
+        const char *env = getenv("WL_GL_TRACE");
+        enabled = (env && env[0] == '1') ? 1 : 0;
+        if (enabled) WL_LOGI("GL trace enabled (WL_GL_TRACE)");
+    }
+    return enabled == 1;
+}
+
+void wl_renderer_gl_check(const char *site)
+{
+    if (!gl_trace_enabled()) return;
+    GLenum e = glGetError();
+    if (e == GL_NO_ERROR) return;
+    /* log each (site, error) pair only once to avoid per-frame spam */
+    static char seen[32][96];
+    static int seen_count;
+    char key[96];
+    snprintf(key, sizeof(key), "%s:%04x", site, (unsigned)e);
+    for (int i = 0; i < seen_count; i++)
+        if (strcmp(seen[i], key) == 0) return;
+    if (seen_count < 32) wl_scpy(seen[seen_count++], key, sizeof(seen[0]));
+    WL_LOGW("GL error %04x at %s", (unsigned)e, site);
+}
+
+const char *wl_renderer_gpu_info(void)
+{
+    static char info[160];
+    if (info[0] == '\0') {
+        const char *vendor = (const char *)glGetString(GL_VENDOR);
+        const char *renderer = (const char *)glGetString(GL_RENDERER);
+        const char *version = (const char *)glGetString(GL_VERSION);
+        snprintf(info, sizeof(info), "%s / %s / GL %s",
+                 vendor ? vendor : "?", renderer ? renderer : "?",
+                 version ? version : "?");
+        WL_LOGI("GPU: %s", info);
+    }
+    return info;
+}
+
 void wl_renderer_init(WlRenderer *r, WlAssets *assets)
 {
     memset(r, 0, sizeof(*r));
@@ -276,11 +326,32 @@ static void set_shader_uniforms(WlRenderer *r, float uv_ox, float uv_oy)
     }
 }
 
-void wl_renderer_draw_world(WlRenderer *r, WlWorld *w, const WlConfig *cfg,
+void wl_renderer_draw_world(WlRenderer *r, WlWorld *w, const struct WlConfig *cfg,
                             uint32_t ticks, bool cam_underwater)
 {
     int width = GetScreenWidth();
     int height = GetScreenHeight();
+
+    /* Clear color + DEPTH before the 3D pass. The depth clear is the
+     * load-bearing part: the sky "clear" below is a 2D gradient quad that
+     * writes no depth, so without this glClear the depth buffer keeps the
+     * previous frame's terrain depths. With GL_LEQUAL any fragment that
+     * becomes farther than its stale depth (the eye moved: mouse look,
+     * view bobbing, gravity settle) is discarded, and terrain vanishes in
+     * patches that show the pale horizon sky through the holes — the
+     * "blocks turn white / untextured" symptom. A perfectly still camera
+     * reproduces identical depths every frame and looks fine, which is
+     * why static screenshots never caught it. (WL_NO_DEPTHCLEAR=1 keeps
+     * the old behaviour for regression testing.) */
+    static bool no_clear = false;
+    static bool no_clear_init = false;
+    if (!no_clear_init) {
+        const char *env = getenv("WL_NO_DEPTHCLEAR");
+        no_clear = (env && env[0] == '1');
+        no_clear_init = true;
+    }
+    if (!no_clear) ClearBackground(r->sky_top);
+    wl_renderer_gl_check("world-clear");
 
     /* sky gradient */
     Color h = r->sky_horizon;
@@ -294,6 +365,7 @@ void wl_renderer_draw_world(WlRenderer *r, WlWorld *w, const WlConfig *cfg,
     BeginMode3D(r->cam);
     extract_frustum(r);
     set_shader_uniforms(r, 0.0f, 0.0f);
+    wl_renderer_gl_check("mode3d-begin");
 
     /* sun and moon (behind everything, no depth) */
     if (cfg->graphics_quality >= 1 && !cam_underwater) {
@@ -311,6 +383,7 @@ void wl_renderer_draw_world(WlRenderer *r, WlWorld *w, const WlConfig *cfg,
 
     /* opaque + cutout chunk pass */
     r->drawn_chunks = 0;
+    r->visible_chunks = 0;
     r->drawn_tris = 0;
     int count = 0;
     WlChunk *const *list = wl_world_chunk_list(w, &count);
@@ -318,6 +391,7 @@ void wl_renderer_draw_world(WlRenderer *r, WlWorld *w, const WlConfig *cfg,
         WlChunk *c = (WlChunk *)list[i];
         if (!c->generated || !c->mesh_opaque.valid) continue;
         if (!chunk_in_frustum(r, c->cx, c->cz)) continue;
+        r->visible_chunks++;
         if (chunk_beyond_fog(r, c->cx, c->cz)) continue;
         Matrix tf = MatrixTranslate((float)(c->cx * WL_CHUNK_W), 0.0f,
                                     (float)(c->cz * WL_CHUNK_W));
@@ -325,6 +399,7 @@ void wl_renderer_draw_world(WlRenderer *r, WlWorld *w, const WlConfig *cfg,
         r->drawn_chunks++;
         r->drawn_tris += c->mesh_opaque.tri_count;
     }
+    wl_renderer_gl_check("opaque-pass");
 
     /* clouds: scrolling alpha plane, no depth write */
     if (cfg->graphics_quality >= 1 && r->cloud_ok && !cam_underwater) {
@@ -339,6 +414,7 @@ void wl_renderer_draw_world(WlRenderer *r, WlWorld *w, const WlConfig *cfg,
         rlEnableDepthMask();
         set_shader_uniforms(r, 0.0f, 0.0f);
     }
+    wl_renderer_gl_check("cloud-pass");
 
     /* water pass: alpha blend, no depth writes */
     rlDisableDepthMask();
@@ -353,6 +429,7 @@ void wl_renderer_draw_world(WlRenderer *r, WlWorld *w, const WlConfig *cfg,
         r->drawn_tris += c->mesh_transparent.tri_count;
     }
     rlEnableDepthMask();
+    wl_renderer_gl_check("water-pass");
 
     EndMode3D();
 }

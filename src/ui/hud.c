@@ -140,8 +140,9 @@ static void draw_debug(WlGame *g)
                             (unsigned long long)gen->seed,
                             wl_world_gamemode(g->world) == WL_WORLD_GAMEMODE_CREATIVE
                                 ? "creative" : "survival");
-    lines[n++] = TextFormat("chunks %d loaded / %d drawn  |  %ld tris",
-                            st.loaded, g->rend.drawn_chunks, g->rend.drawn_tris);
+    lines[n++] = TextFormat("chunks %d loaded / %d visible / %d drawn  |  %ld tris",
+                            st.loaded, g->rend.visible_chunks, g->rend.drawn_chunks,
+                            g->rend.drawn_tris);
     lines[n++] = TextFormat("gen queue %d  pending %d", st.queued_gen,
                             wl_world_pending(g->world, p->pos.x, p->pos.z));
     lines[n++] = TextFormat("%.2f ms avg | worst %.2f ms (1%% low %.0f fps) | rss %d MiB",
@@ -152,6 +153,8 @@ static void draw_debug(WlGame *g)
                             st.gen_count,
                             st.gen_count > 0 ? st.gen_ms_total / (double)st.gen_count : 0.0,
                             st.mesh_ms_ema, st.mesh_ms_last);
+    if (g->gpu_info[0] != '\0')
+        lines[n++] = TextFormat("gpu %s", g->gpu_info);
 
     for (int i = 0; i < n; i++)
         DrawTextEx(f, lines[i], (Vector2){ 8, 8 + i * (fs + 4) }, fs, 1.0f,

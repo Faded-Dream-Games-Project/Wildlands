@@ -172,3 +172,21 @@ bool wl_keybinds_save(const WlKeybinds *kb, const char *path)
     else    WL_LOGE("failed to save keybindings to %s", path);
     return ok;
 }
+
+/* ------------------------------------------------------------------ */
+/* held-state query + test seam                                        */
+/* ------------------------------------------------------------------ */
+
+static bool s_debug_hold[WL_ACT_COUNT];
+
+bool wl_keybinds_down(const WlKeybinds *kb, WlAction action)
+{
+    if (action < 0 || action >= WL_ACT_COUNT) return false;
+    if (s_debug_hold[action]) return true;
+    return IsKeyDown(kb->key[action]);
+}
+
+void wl_keybinds_debug_hold(WlAction action, bool held)
+{
+    if (action >= 0 && action < WL_ACT_COUNT) s_debug_hold[action] = held;
+}
