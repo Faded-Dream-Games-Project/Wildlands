@@ -88,5 +88,5 @@ void wl_menu_main(WlGame *g)
     DrawTextEx(f, foot, (Vector2){ (sw - ts.x) / 2, sh - 30 * g->ui.scale }, fs, 1.0f,
                (Color){ 110, 116, 126, 255 });
 
-    wl_audio_update(&g->audio, GetFrameTime(), 0, false);
+    wl_audio_update(&g->audio, GetFrameTime(), 0, false, false);
 }

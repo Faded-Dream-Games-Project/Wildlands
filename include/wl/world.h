@@ -123,6 +123,10 @@ void wl_furnaces_update(WlWorld *w, float dt);
 WlItemId wl_furnace_smelt_result(WlItemId input);
 /* Burn time in seconds for a fuel item (0 = not a fuel). */
 float wl_furnace_fuel_time(WlItemId fuel);
+/* Pops one queued furnace sound event; false when none. kind: 1 = the
+ * furnace ignited, 2 = an item finished smelting. */
+bool wl_furnace_pop_event(int *x, int *y, int *z, int *kind);
+
 /* Persistence: furnaces.dat. */
 bool wl_world_save_furnaces(const WlWorld *w);
 void wl_world_load_furnaces(WlWorld *w);
@@ -132,6 +136,10 @@ void wl_world_load_furnaces(WlWorld *w);
  * false when the drop list is full (caller retries later). */
 bool wl_world_add_drop(WlWorld *w, WlItemId item, uint8_t count, uint16_t dur,
                        Vector3 pos);
+/* Number of item pickups since the last call (drives the pickup sound;
+ * resets the counter). */
+int wl_world_consume_pickups(WlWorld *w);
+
 /* Same, but with an explicit throw velocity and pickup delay (Q-drop).
  * delay <= 0 uses the default 0.5s. */
 bool wl_world_add_drop_thrown(WlWorld *w, WlItemId item, uint8_t count,

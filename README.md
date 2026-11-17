@@ -42,9 +42,16 @@ identity. Build, explore, survive, and create.
   coal (or wood), and smelt iron ore into ingots, raw meat into cooked
   food, sand into glass. The furnace shows fuel and progress bars,
   swaps to a lit block while burning and keeps its contents in the save.
-- **Feel** — progressive block-breaking cracks, Q to drop the held
-  stack, hunger drains with sprinting and regenerates health when well
-  fed, starvation hurts, footsteps and impact sounds per material.
+- **Feel** — progressive block-breaking cracks, Q drops one item
+  (Shift+Q the whole stack), hunger drains with sprinting and
+  regenerates health when well fed, starvation hurts.
+- **Sound** — 35 synthesized sound effects: footsteps per material
+  (grass/stone/dirt/wood/sand/snow), jumps and landings, mining and
+  placing, eating, item pickups and throws, sword swings, arrows, mob
+  voices and hurt sounds with distance attenuation, furnace ignition
+  and completion, death, plus day/night/cave ambience — all with pitch
+  variation and repeat cooldowns, mixed through master / music / sfx /
+  ambience volume buses.
 - **Pause menu** — Esc pauses (never quits): the world freezes behind a
   dimmed panel with Resume Game, Options (returns to the pause menu),
   Save and Quit to Title, and Quit to Desktop. Failed saves are reported
@@ -101,7 +108,9 @@ round-trip, Save and Quit to Title, Quit to Desktop) end to end.
 key/mouse events (`tools/xsend.c`): menus open and stay open, the camera
 does not jump, icons and held items follow hotbar selection, mined blocks
 appear in the hotbar, a placed torch illuminates a night scene, the
-furnace UI opens on right-click, and Q drops the held stack (9 checks).
+the furnace UI opens and closes cleanly around a camera-lifecycle
+check, Q drops one item while Shift+Q drops the stack, and held tool/
+food sprites render in first person (18 checks).
 
 `tools/repro_render.sh` and `tools/verify_battery.sh` reproduce and
 regression-test the render pipeline against camera-motion artifacts
@@ -138,6 +147,8 @@ mouse-look and movement paths.
 | Attack / mine | Left mouse (hold) |
 | Use / place / eat | Right mouse |
 | Pick block | Middle mouse |
+| Drop one item | Q |
+| Drop whole stack | Shift + Q |
 | Inventory | E |
 | Hotbar | 1–9 or mouse wheel |
 | Move stack | Shift + click · Split / place one | Right click |

@@ -10,6 +10,7 @@
 #include "wl/player.h"
 #include "wl/config.h"
 #include "wl/audio.h"
+#include "wl/assets.h"
 #include "wl/block.h"
 #include "wl/item.h"
 #include "wl/worldgen.h"
@@ -190,6 +191,7 @@ void wl_entity_hurt(WlWorld *w, WlEntity *e, float amount, Vector3 knock_dir,
     if (!e || !e->active || e->type == WL_ENT_ARROW) return;
     e->health -= amount;
     e->hurt_flash = 0.35f;
+    /* the voice answers the hit (pitch-varied below) */
     e->provoked = true;
     /* knockback + upward pop */
     e->vel.x += knock_dir.x * 5.5f;
@@ -197,7 +199,7 @@ void wl_entity_hurt(WlWorld *w, WlEntity *e, float amount, Vector3 knock_dir,
     if (e->on_ground) e->vel.y = 4.5f;
     /* animals panic */
     if (!wl_entity_type_hostile(e->type)) e->wander_timer = -6.0f; /* flee mode */
-    wl_audio_play(audio, WL_SND_MOB_HURT);
+    wl_audio_play_v(audio, WL_SND_MOB_HURT, 0.15f);
     if (e->health <= 0.0f) {
         drop_loot(w, e);
         e->active = false;
@@ -379,6 +381,7 @@ static void ai_arrow(WlWorld *w, WlEntity *e, struct WlPlayer *p,
     if (wl_world_solid_at(w, (int)floorf(e->pos.x), (int)floorf(e->pos.y),
                           (int)floorf(e->pos.z))) {
         e->active = false; /* stuck in a block */
+        if (audio) wl_audio_play_v(audio, WL_SND_ARROW_HIT, 0.12f);
         return;
     }
     if (p && !p->dead) {
@@ -388,6 +391,7 @@ static void ai_arrow(WlWorld *w, WlEntity *e, struct WlPlayer *p,
         float dx = p->pos.x - e->pos.x, dz = p->pos.z - e->pos.z;
         if (dx * dx + dy * dy * 0.5f + dz * dz < 0.7f * 0.7f) {
             e->active = false;
+            wl_audio_play_v(audio, WL_SND_ARROW_HIT, 0.15f);
             wl_player_damage(p, 3.0f, audio, difficulty);
         }
     }
@@ -491,6 +495,24 @@ static void try_spawn(WlWorld *w, struct WlPlayer *p, const WlConfig *cfg)
     }
 }
 
+/* ambient voices: one per type on the air at a time, attenuated by the
+ * distance to the player */
+static WlSndId voice_for(WlEntityType t)
+{
+    switch (t) {
+    case WL_ENT_ZOMBIE: return WL_SND_ZOMBIE_AMBIENT;
+    case WL_ENT_SKELETON: return WL_SND_SKELETON_AMBIENT;
+    case WL_ENT_SPIDER: return WL_SND_SPIDER_AMBIENT;
+    case WL_ENT_COW: return WL_SND_COW;
+    case WL_ENT_PIG: return WL_SND_PIG;
+    case WL_ENT_CHICKEN: return WL_SND_CHICKEN;
+    case WL_ENT_SHEEP: return WL_SND_SHEEP;
+    default: return WL_SND_COUNT; /* none */
+    }
+}
+
+static float s_voice_cooldown[WL_ENT_TYPE_COUNT];
+
 void wl_world_update_entities(WlWorld *w, struct WlPlayer *p,
                               const WlConfig *cfg, struct WlAudio *audio,
                               float dt)
@@ -499,6 +521,9 @@ void wl_world_update_entities(WlWorld *w, struct WlPlayer *p,
     int count = 0;
     WlEntity *ents = wl_world_entities(w, &count);
     if (!ents) return;
+
+    for (int t = 0; t < WL_ENT_TYPE_COUNT; t++)
+        if (s_voice_cooldown[t] > 0.0f) s_voice_cooldown[t] -= dt;
 
     static float spawn_acc = 0.0f;
     spawn_acc += dt * s_spawn_rate;
@@ -514,6 +539,20 @@ void wl_world_update_entities(WlWorld *w, struct WlPlayer *p,
         e->live_ticks += dt;
         if (e->attack_cd > 0.0f) e->attack_cd -= dt;
         if (e->hurt_flash > 0.0f) e->hurt_flash -= dt;
+
+        /* occasional ambient voice when close enough to be heard */
+        if (p && audio && e->type != WL_ENT_ARROW) {
+            WlSndId voice = voice_for(e->type);
+            if (voice != WL_SND_COUNT && s_voice_cooldown[e->type] <= 0.0f) {
+                float d2v = dist2_xz(e->pos, p->pos);
+                if (d2v < 20.0f * 20.0f &&
+                    (ent_rand(e, (uint32_t)(e->live_ticks * 3.0f) + 99) % 97) < 1) {
+                    Vector3 ear = wl_player_eye(p);
+                    wl_audio_play_at(audio, voice, e->pos, ear, 26.0f);
+                    s_voice_cooldown[e->type] = 4.0f;
+                }
+            }
+        }
 
         if (e->type == WL_ENT_ARROW) {
             ai_arrow(w, e, p, audio, cfg->difficulty, dt);

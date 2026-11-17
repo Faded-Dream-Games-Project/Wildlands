@@ -4,6 +4,7 @@
 
 #include "wl/wl_common.h"
 #include "raylib.h"
+#include "wl/item.h" /* WL_ITEM_MAX */
 #include "wl/assets.h"
 
 struct WlWorld;
@@ -36,9 +37,12 @@ typedef struct WlRenderer {
     bool cloud_ok;
 
     /* lazily-built meshes for item entities (held item + world drops),
-     * indexed by item id; id 0 is never used */
-    Mesh item_mesh[256];
-    bool item_mesh_ok[256];
+     * indexed by item id. Sized WL_ITEM_MAX: pure items live at ids
+     * >= 256, so a 256-entry cache indexed out of bounds for every
+     * sprite item (tools, food, torch, materials) — undefined behaviour
+     * that worked on some drivers and broke held items on others. */
+    Mesh item_mesh[WL_ITEM_MAX];
+    bool item_mesh_ok[WL_ITEM_MAX];
 
     /* entities: mob part meshes (unit cubes, one per entity-atlas tile)
      * and the entity/item materials (entity shader + local light) */
@@ -90,6 +94,10 @@ void wl_renderer_draw_held_item(WlRenderer *r, struct WlWorld *w,
 /* Mobs, animals and arrows: animated box models skinned from the entity
  * atlas, lit by the voxel light at each entity's position. */
 void wl_renderer_draw_entities(WlRenderer *r, struct WlWorld *w);
+
+/* Test automation: renders every registered item's mesh laid out on a
+ * grid in front of a fixed camera (one screenshot audits them all). */
+void wl_renderer_draw_item_gallery(WlRenderer *r);
 
 /* Progressive breaking-stage overlay on the targeted block. */
 void wl_renderer_draw_break_overlay(WlRenderer *r, struct WlWorld *w,

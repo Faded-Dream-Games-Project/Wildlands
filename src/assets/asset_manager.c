@@ -200,13 +200,40 @@ WlAssets *wl_assets_create(const char *root)
         "audio/mob_hurt.wav",
         "audio/bow.wav",
         "audio/pickup.wav",
+        "audio/throw.wav",
+        "audio/step_dirt.wav",
+        "audio/step_wood.wav",
+        "audio/step_sand.wav",
+        "audio/step_snow.wav",
+        "audio/jump.wav",
+        "audio/land.wav",
+        "audio/death.wav",
+        "audio/sword_swing.wav",
+        "audio/arrow_hit.wav",
+        "audio/furnace_ignite.wav",
+        "audio/furnace_done.wav",
+        "audio/zombie_ambient.wav",
+        "audio/skeleton_ambient.wav",
+        "audio/spider_ambient.wav",
+        "audio/cow_voice.wav",
+        "audio/pig_voice.wav",
+        "audio/chicken_voice.wav",
+        "audio/sheep_voice.wav",
+        "audio/amb_day.wav",
+        "audio/amb_night.wav",
+        "audio/amb_cave.wav",
     };
     for (int i = 0; i < (int)WL_SND_COUNT; i++) {
         char path[WL_PATH_MAX];
         if (!build_path(path, sizeof(path), a, snd_files[i])) continue;
         a->snds[i] = LoadSound(path);
         a->snds_ok[i] = (a->snds[i].frameCount > 0);
-        if (!a->snds_ok[i]) WL_LOGW("missing sound: %s (silent)", path);
+        if (!a->snds_ok[i]) {
+            if (FileExists(path))
+                WL_LOGW("sound failed to load (no audio device?): %s", path);
+            else
+                WL_LOGW("missing sound file: %s (silent)", path);
+        }
     }
 
     static const char *mus_files[WL_MUS_COUNT] = {

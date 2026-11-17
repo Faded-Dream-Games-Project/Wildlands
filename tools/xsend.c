@@ -48,8 +48,9 @@ int main(int argc, char **argv)
     if (argc < 4) {
         fprintf(stderr, "usage: %s <display> <title-substr> key <keysym> [hold_ms]\n"
                         "       %s <display> <title-substr> move <x> <y>\n"
-                        "       %s <display> <title-substr> click [left|right] [hold_ms]\n",
-                argv[0], argv[0], argv[0]);
+                        "       %s <display> <title-substr> click [left|right] [hold_ms]\n"
+                        "       %s <display> <title-substr> down|up <keysym>   (held keys)\n",
+                argv[0], argv[0], argv[0], argv[0]);
         return 2;
     }
     Display *d = XOpenDisplay(argv[1]);
@@ -102,6 +103,30 @@ int main(int argc, char **argv)
             XFlush(d);
             printf("xsend: key %s (code %u) press+%ldms+release\n",
                    argv[4], (unsigned)code, hold);
+        }
+    } else if ((strcmp(argv[3], "down") == 0 || strcmp(argv[3], "up") == 0) &&
+               argc >= 5) {
+        /* hold a modifier across other events (down ... up) */
+        KeySym sym = XStringToKeysym(argv[4]);
+        if (sym == NoSymbol) {
+            fprintf(stderr, "xsend: unknown keysym '%s'\n", argv[4]);
+            rc = 1;
+        } else {
+            KeyCode code = XKeysymToKeycode(d, sym);
+            XKeyEvent ev;
+            memset(&ev, 0, sizeof(ev));
+            ev.display = d;
+            ev.window = target;
+            ev.root = root;
+            ev.subwindow = None;
+            ev.time = CurrentTime;
+            ev.same_screen = True;
+            ev.keycode = code;
+            ev.type = (argv[3][0] == 'd') ? KeyPress : KeyRelease;
+            ev.state = 0;
+            XSendEvent(d, target, False, 0, (XEvent *)&ev);
+            XFlush(d);
+            printf("xsend: %s %s\n", argv[3], argv[4]);
         }
     } else if (strcmp(argv[3], "click") == 0 && argc >= 5) {
         unsigned int button = (strcmp(argv[4], "right") == 0) ? Button3 : Button1;

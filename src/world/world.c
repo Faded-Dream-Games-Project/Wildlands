@@ -79,6 +79,10 @@ struct WlWorld {
     WlFurnace furnaces[WL_FURNACES_MAX];
     int furnace_count;
 
+    /* sound events raised inside world code that has no audio access;
+     * drained by the game loop every frame */
+    int pickup_sfx_pending;
+
     /* generation worker */
     bool thread_ok;
     pthread_t thread;
@@ -542,6 +546,7 @@ void wl_world_update_drops(WlWorld *w, struct WlPlayer *p, float dt)
             if (dx * dx + dy * dy + dz * dz < pickup_radius * pickup_radius) {
                 int taken = wl_inv_add_partial(&p->inv, d->item, d->count, d->dur);
                 if (taken > 0) {
+                    w->pickup_sfx_pending++;
                     d->count = (uint8_t)(d->count - taken);
                     if (d->count == 0) {
                         w->drops[i] = w->drops[--w->drop_count];
@@ -551,6 +556,14 @@ void wl_world_update_drops(WlWorld *w, struct WlPlayer *p, float dt)
             }
         }
     }
+}
+
+int wl_world_consume_pickups(WlWorld *w)
+{
+    if (!w) return 0;
+    int n = w->pickup_sfx_pending;
+    w->pickup_sfx_pending = 0;
+    return n;
 }
 
 WlEntity *wl_world_spawn_entity(WlWorld *w, WlEntityType type, Vector3 pos)

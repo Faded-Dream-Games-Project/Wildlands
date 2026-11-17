@@ -303,6 +303,7 @@ int wl_interact_update(WlPlayer *p, WlWorld *w, const WlConfig *cfg,
             else if (held && held->tool != WL_TOOL_NONE)
                 dmg = 2.0f + (float)held->tool_tier * 0.5f;
             wl_entity_hurt(w, target, dmg, look, audio);
+            wl_audio_play_v(audio, WL_SND_SWORD_SWING, 0.14f);
             if (held && held->durability > 0) damage_tool(p, slot, audio);
             p->break_cooldown = 0.45;
             p->break_progress = 0.0;

@@ -1153,6 +1153,155 @@ def gen_sounds():
     x += highpass_band(rng.standard_normal(n), 0.35, 0.65) * env_exp(n, 22) * 0.5
     write_wav(out / "bow.wav", x)
 
+    n = int(0.09 * SR)  # throw: short soft whoosh
+    t = np.arange(n) / SR
+    x = lowpass(rng.standard_normal(n), 0.30) * env_exp(n, 60) * 0.5
+    write_wav(out / "throw.wav", x)
+
+    n = int(0.09 * SR)  # step dirt: dull crunch
+    write_wav(out / "step_dirt.wav", lowpass(rng.standard_normal(n), 0.06) * env_exp(n, 55) * 2.0)
+
+    n = int(0.07 * SR)  # step wood: hollow knock
+    t = np.arange(n) / SR
+    x = np.sin(2 * np.pi * 150 * t) * env_exp(n, 80) * 0.6
+    x += lowpass(rng.standard_normal(n), 0.2) * env_exp(n, 90) * 0.4
+    write_wav(out / "step_wood.wav", x)
+
+    n = int(0.12 * SR)  # step sand: soft shuffle
+    write_wav(out / "step_sand.wav", lowpass(rng.standard_normal(n), 0.04) * env_exp(n, 40) * 2.6)
+
+    n = int(0.12 * SR)  # step snow: squeaky crunch
+    x = lowpass(rng.standard_normal(n), 0.10) * env_exp(n, 45) * 1.8
+    x += np.sin(2 * np.pi * 900 * np.arange(n) / SR) * env_exp(n, 200) * 0.06
+    write_wav(out / "step_snow.wav", x)
+
+    n = int(0.10 * SR)  # jump: quick exertion puff
+    write_wav(out / "jump.wav", lowpass(rng.standard_normal(n), 0.18) * env_exp(n, 55) * 1.3)
+
+    n = int(0.14 * SR)  # land: heavy thud
+    t = np.arange(n) / SR
+    x = np.sin(2 * np.pi * 85 * t) * env_exp(n, 30) * 0.9
+    x += lowpass(rng.standard_normal(n), 0.10) * env_exp(n, 35) * 0.8
+    write_wav(out / "land.wav", x)
+
+    n = int(0.5 * SR)  # death: descending tone
+    t = np.arange(n) / SR
+    f = 320 - 240 * t / (n / SR)
+    x = np.sign(np.sin(2 * np.pi * np.cumsum(f) / SR)) * 0.3 * env_exp(n, 6)
+    write_wav(out / "death.wav", x)
+
+    n = int(0.16 * SR)  # sword swing: airy sweep
+    t = np.arange(n) / SR
+    f = 500 + 1400 * t / (n / SR)
+    x = highpass_band(rng.standard_normal(n), 0.30, 0.60) * env_exp(n, 24) * 0.75
+    x += np.sin(2 * np.pi * np.cumsum(f) / SR) * env_exp(n, 30) * 0.12
+    write_wav(out / "sword_swing.wav", x)
+
+    n = int(0.08 * SR)  # arrow hit: dry thunk
+    t = np.arange(n) / SR
+    x = np.sin(2 * np.pi * 200 * t) * env_exp(n, 110) * 0.7
+    x += lowpass(rng.standard_normal(n), 0.4) * env_exp(n, 120) * 0.5
+    write_wav(out / "arrow_hit.wav", x)
+
+    n = int(0.35 * SR)  # furnace ignite: whoosh + crackle
+    x = highpass_band(rng.standard_normal(n), 0.10, 0.45) * env_exp(n, 10) * 0.6
+    for i in range(0, n, int(0.03 * SR)):
+        seg = 60
+        x[i:i + seg] += rng.standard_normal(min(seg, n - i)) * 0.25
+    write_wav(out / "furnace_ignite.wav", x)
+
+    n = int(0.22 * SR)  # furnace done: bright ding
+    t = np.arange(n) / SR
+    x = (np.sin(2 * np.pi * 880 * t) + 0.5 * np.sin(2 * np.pi * 1320 * t)) \
+        * env_exp(n, 16) * 0.35
+    write_wav(out / "furnace_done.wav", x)
+
+    n = int(0.7 * SR)  # zombie groan: low wobbly tone
+    t = np.arange(n) / SR
+    f = 95 + 18 * np.sin(2 * np.pi * 2.3 * t)
+    x = np.sign(np.sin(2 * np.pi * np.cumsum(f) / SR)) * 0.22 * env_exp(n, 5)
+    x = lowpass(x, 0.12)
+    write_wav(out / "zombie_ambient.wav", x)
+
+    n = int(0.5 * SR)  # skeleton rattle: bone clacks
+    x = np.zeros(n)
+    for k in range(6):
+        i = int((0.02 + 0.075 * k) * SR)
+        m = min(240, n - i)
+        x[i:i + m] += lowpass(rng.standard_normal(m), 0.5) * env_exp(m, 30) * 0.55
+    write_wav(out / "skeleton_ambient.wav", x)
+
+    n = int(0.4 * SR)  # spider hiss
+    x = highpass_band(rng.standard_normal(n), 0.35, 0.75) * env_exp(n, 9) * 0.30
+    write_wav(out / "spider_ambient.wav", x)
+
+    n = int(0.55 * SR)  # cow moo: rising/falling low tone
+    t = np.arange(n) / SR
+    f = 140 + 55 * np.sin(np.pi * t / (n / SR))
+    x = np.sign(np.sin(2 * np.pi * np.cumsum(f) / SR)) * 0.20 * env_exp(n, 6)
+    x = lowpass(x, 0.14)
+    write_wav(out / "cow_voice.wav", x)
+
+    n = int(0.30 * SR)  # pig oink: short nasal grunt
+    t = np.arange(n) / SR
+    f = 240 - 90 * (t / (n / SR))
+    x = np.sign(np.sin(2 * np.pi * np.cumsum(f) / SR)) * 0.25 * env_exp(n, 18)
+    x = lowpass(x, 0.30)
+    write_wav(out / "pig_voice.wav", x)
+
+    n = int(0.25 * SR)  # chicken cluck
+    t = np.arange(n) / SR
+    f = 700 + 250 * np.sin(2 * np.pi * 14 * t)
+    x = np.sin(2 * np.pi * np.cumsum(f) / SR) * env_exp(n, 26) * 0.30
+    for k in range(3):  # broken into clucks
+        i = int((0.02 + 0.08 * k) * SR)
+        m = int(0.05 * SR)
+        x[i:i + m] *= 0.4
+    write_wav(out / "chicken_voice.wav", x)
+
+    n = int(0.5 * SR)  # sheep baa: wobbling mid tone
+    t = np.arange(n) / SR
+    f = 330 + 40 * np.sin(2 * np.pi * 7 * t)
+    x = np.sign(np.sin(2 * np.pi * np.cumsum(f) / SR)) * 0.18 * env_exp(n, 8)
+    x = lowpass(x, 0.35)
+    write_wav(out / "sheep_voice.wav", x)
+
+    n = int(2.4 * SR)  # day ambience: sparse bird chirps
+    x = np.zeros(n)
+    for k in range(5):
+        i = int(rng.integers(0, n - int(0.3 * SR)))
+        m = int(0.14 * SR)
+        t2 = np.arange(m) / SR
+        f = 2200 + rng.uniform(-300, 500) + 800 * np.sin(2 * np.pi * rng.uniform(14, 22) * t2)
+        chirp = np.sin(2 * np.pi * np.cumsum(f) / SR) * env_exp(m, 28) * 0.16
+        x[i:i + m] += chirp
+        x[i + m:i + m + 60] += rng.standard_normal(min(60, n - i - m)) * 0.03
+    write_wav(out / "amb_day.wav", x)
+
+    n = int(2.8 * SR)  # night ambience: cricket chirp train
+    x = np.zeros(n)
+    for k in range(4):
+        i = int(rng.integers(0, max(1, n - int(0.6 * SR))))
+        for j in range(5):
+            s = i + int(j * 0.055 * SR)
+            m = int(0.028 * SR)
+            if s + m >= n: break
+            f = 4200 + rng.uniform(-200, 200)
+            t2 = np.arange(m) / SR
+            x[s:s + m] += np.sin(2 * np.pi * f * t2) * env_exp(m, 60) * 0.10
+    write_wav(out / "amb_night.wav", x)
+
+    n = int(3.0 * SR)  # cave ambience: deep drone + a water drip
+    t = np.arange(n) / SR
+    x = np.sin(2 * np.pi * 55 * t) * 0.05 + np.sin(2 * np.pi * 82 * t) * 0.03
+    x *= 0.6 + 0.4 * np.sin(2 * np.pi * 0.15 * t)
+    i = int(rng.integers(int(0.5 * SR), n - int(0.2 * SR)))
+    m = int(0.16 * SR)
+    t2 = np.arange(m) / SR
+    f = 900 - 500 * t2 / (m / SR)
+    x[i:i + m] += np.sin(2 * np.pi * np.cumsum(f) / SR) * env_exp(m, 22) * 0.20
+    write_wav(out / "amb_cave.wav", x)
+
     n = int(0.09 * SR)  # item pickup: bright pop
     t = np.arange(n) / SR
     x = np.sin(2 * np.pi * 660 * t) * env_exp(n, 90) * 0.5

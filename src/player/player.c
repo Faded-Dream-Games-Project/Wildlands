@@ -169,6 +169,7 @@ void wl_player_damage(WlPlayer *p, float amount, struct WlAudio *audio, int diff
     if (p->health <= 0.0f) {
         p->health = 0.0f;
         p->dead = true;
+        wl_audio_play(audio, WL_SND_DEATH);
         WL_LOGI("player died");
     }
 }
@@ -178,8 +179,19 @@ static WlSndId step_sound_for(uint8_t block)
     switch (block) {
     case WL_BLOCK_STONE: case WL_BLOCK_COBBLE: case WL_BLOCK_SANDSTONE:
     case WL_BLOCK_COAL_ORE: case WL_BLOCK_IRON_ORE: case WL_BLOCK_GOLD_ORE:
-    case WL_BLOCK_DIAMOND_ORE: case WL_BLOCK_BEDROCK: case WL_BLOCK_SNOW:
-    case WL_BLOCK_ICE: case WL_BLOCK_SNOW_GRASS:
+    case WL_BLOCK_DIAMOND_ORE: case WL_BLOCK_BEDROCK: case WL_BLOCK_FURNACE:
+    case WL_BLOCK_FURNACE_LIT:
+        return WL_SND_STEP_STONE;
+    case WL_BLOCK_DIRT: case WL_BLOCK_GRAVEL:
+        return WL_SND_STEP_DIRT;
+    case WL_BLOCK_PLANKS: case WL_BLOCK_LOG: case WL_BLOCK_BIRCH_LOG:
+    case WL_BLOCK_CRAFTING_TABLE:
+        return WL_SND_STEP_WOOD;
+    case WL_BLOCK_SAND:
+        return WL_SND_STEP_SAND;
+    case WL_BLOCK_SNOW: case WL_BLOCK_SNOW_GRASS:
+        return WL_SND_STEP_SNOW;
+    case WL_BLOCK_ICE:
         return WL_SND_STEP_STONE;
     default:
         return WL_SND_STEP_GRASS;
@@ -378,6 +390,8 @@ void wl_player_update(WlPlayer *p, WlWorld *w, const WlKeybinds *kb,
             p->vel.y = WL_P_JUMP;
             p->on_ground = false;
             p->exhaustion += 0.1f;
+            wl_audio_play_v(audio, WL_SND_JUMP, 0.10f);
+            p->fall_start_y = p->pos.y; /* jump starts a fall measurement */
         }
         p->vel.y -= WL_P_GRAVITY * dt;
         if (p->vel.y < -WL_P_TERMINAL) p->vel.y = -WL_P_TERMINAL;
@@ -426,6 +440,8 @@ void wl_player_update(WlPlayer *p, WlWorld *w, const WlKeybinds *kb,
         p->fall_start_y = -1.0f;
         if (dist > 3.2f && gamemode == WL_WORLD_GAMEMODE_SURVIVAL)
             wl_player_damage(p, floorf(dist - 3.0f), audio, cfg->difficulty);
+        else if (dist > 1.2f)
+            wl_audio_play_v(audio, WL_SND_LAND, 0.10f); /* soft landing */
     }
 
     /* --- eye height + bobbing --- */
@@ -451,7 +467,7 @@ void wl_player_update(WlPlayer *p, WlWorld *w, const WlKeybinds *kb,
             uint8_t below = wl_world_get_block(w, (int)floorf(p->pos.x),
                                                (int)floorf(p->pos.y - 0.4f),
                                                (int)floorf(p->pos.z));
-            wl_audio_play(audio, step_sound_for(below));
+            wl_audio_play_v(audio, step_sound_for(below), 0.12f);
         }
     }
 

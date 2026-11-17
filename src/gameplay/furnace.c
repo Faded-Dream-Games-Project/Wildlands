@@ -12,6 +12,32 @@
 
 #define WL_SMELT_TIME 5.0f /* seconds per item */
 
+/* sound events for the game loop (this module has no audio access) */
+enum { WL_FURNACE_EV_IGNITE = 1, WL_FURNACE_EV_DONE = 2 };
+static struct { int x, y, z, kind; } s_events[8];
+static int s_event_count;
+
+bool wl_furnace_pop_event(int *x, int *y, int *z, int *kind)
+{
+    if (s_event_count <= 0) return false;
+    s_event_count--;
+    if (x) *x = s_events[s_event_count].x;
+    if (y) *y = s_events[s_event_count].y;
+    if (z) *z = s_events[s_event_count].z;
+    if (kind) *kind = s_events[s_event_count].kind;
+    return true;
+}
+
+static void push_event(int x, int y, int z, int kind)
+{
+    if (s_event_count >= 8) return; /* bounded; drops are harmless */
+    s_events[s_event_count].x = x;
+    s_events[s_event_count].y = y;
+    s_events[s_event_count].z = z;
+    s_events[s_event_count].kind = kind;
+    s_event_count++;
+}
+
 /* ------------------------------------------------------------------ */
 /* recipes + fuel                                                      */
 /* ------------------------------------------------------------------ */
@@ -79,6 +105,7 @@ void wl_furnaces_update(WlWorld *w, float dt)
             wl_furnace_fuel_time(f->fuel.item) > 0.0f && f->fuel.count > 0) {
             f->burn_total = wl_furnace_fuel_time(f->fuel.item);
             f->burn_left = f->burn_total;
+            push_event(f->x, f->y, f->z, WL_FURNACE_EV_IGNITE);
             f->fuel.count--;
             if (f->fuel.count == 0) {
                 f->fuel.item = WL_ITEM_NONE;
@@ -104,6 +131,7 @@ void wl_furnaces_update(WlWorld *w, float dt)
                     } else {
                         f->output.count++;
                     }
+                    push_event(f->x, f->y, f->z, WL_FURNACE_EV_DONE);
                     f->input.count--;
                     if (f->input.count == 0) {
                         f->input.item = WL_ITEM_NONE;

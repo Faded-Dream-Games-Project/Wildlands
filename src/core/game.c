@@ -70,6 +70,8 @@ static void parse_args(WlGame *g, int argc, char **argv)
         } else if (wl_str_eq(argv[i], "--yaw") && i + 1 < argc) {
             g->demo_dir_set = true;
             g->demo_yaw = (float)atof(argv[++i]) * 0.017453293f;
+        } else if (wl_str_eq(argv[i], "--itemgallery")) {
+            g->demo_itemgallery = true;
         } else if (wl_str_eq(argv[i], "--time") && i + 1 < argc) {
             g->demo_time = atoi(argv[++i]);
         } else if (wl_str_eq(argv[i], "--pitch") && i + 1 < argc) {
@@ -533,6 +535,8 @@ bool wl_game_exit_world(WlGame *g)
     g->state = WL_STATE_MAIN_MENU;
     g->overlay = WL_OVERLAY_NONE;
     EnableCursor();
+    /* world sounds (steps, mobs, furnaces) must not outlive the world */
+    wl_audio_stop_sfx(&g->audio);
     wl_audio_stop_music(&g->audio);
     return true;
 }
@@ -1459,7 +1463,7 @@ static void loading_frame(WlGame *g)
     uitest_maybe_shot(g);
     EndDrawing();
 
-    wl_audio_update(&g->audio, GetFrameTime(), 0, false);
+    wl_audio_update(&g->audio, GetFrameTime(), 0, false, false);
 }
 
 static void play_frame(WlGame *g)
@@ -1490,7 +1494,9 @@ static void play_frame(WlGame *g)
     /* global keys */
     if (!pause_now && wl_game_key_pressed(g, g->keys.key[WL_ACT_PAUSE])) {
         if (overlay_open) {
-            if (g->overlay == WL_OVERLAY_FURNACE) g->overlay = WL_OVERLAY_NONE;
+            /* ESC closes any overlay first; it must not open the pause
+             * menu (or anything else) in the same press */
+            if (g->overlay == WL_OVERLAY_FURNACE) wl_furnace_ui_close(g);
             else wl_inv_ui_close(g);
             DisableCursor();
         } else if (!p->dead) {
@@ -1501,7 +1507,7 @@ static void play_frame(WlGame *g)
     }
     if (!pause_now && IsKeyPressed(g->keys.key[WL_ACT_INVENTORY]) && !p->dead) {
         if (overlay_open) {
-            if (g->overlay == WL_OVERLAY_FURNACE) g->overlay = WL_OVERLAY_NONE;
+            if (g->overlay == WL_OVERLAY_FURNACE) wl_furnace_ui_close(g);
             else wl_inv_ui_close(g);
             DisableCursor();
         } else {
@@ -1545,24 +1551,32 @@ static void play_frame(WlGame *g)
             wl_scpy(g->item_toast_name, it ? it->display : "", sizeof(g->item_toast_name));
         }
 
-        /* Q: drop the selected stack into the world */
+        /* Q: drop one item from the selected stack; hold Shift to throw
+         * the whole stack (documented in Settings > Controls) */
         if (wl_game_key_pressed(g, g->keys.key[WL_ACT_DROP])) {
             WlSlot *slot = &p->inv.slots[p->selected_slot];
             if (slot->item != WL_ITEM_NONE) {
+                bool whole_stack = IsKeyDown(KEY_LEFT_SHIFT) ||
+                                   IsKeyDown(KEY_RIGHT_SHIFT);
+                uint8_t n = whole_stack ? slot->count : 1;
                 Vector3 eye = wl_player_eye(p);
                 Vector3 look = wl_player_look_dir(p);
                 Vector3 pos = { eye.x + look.x * 0.9f, eye.y - 0.25f,
                                 eye.z + look.z * 0.9f };
                 Vector3 vel = { look.x * 5.0f, 1.6f + look.y * 4.0f, look.z * 5.0f };
-                if (wl_world_add_drop_thrown(g->world, slot->item, slot->count,
-                                             slot->dur, pos, vel, 1.3f)) {
+                if (wl_world_add_drop_thrown(g->world, slot->item, n,
+                                             whole_stack ? slot->dur : 0,
+                                             pos, vel, 1.3f)) {
                     const WlItem *it = wl_item_get(slot->item);
-                    WL_LOGD("dropped %d x %s", (int)slot->count,
-                            it ? it->name : "?");
-                    slot->item = WL_ITEM_NONE;
-                    slot->count = 0;
-                    slot->dur = 0;
-                    wl_audio_play(&g->audio, WL_SND_CLICK);
+                    WL_LOGD("dropped %d x %s%s", (int)n,
+                            it ? it->name : "?",
+                            whole_stack ? " (stack)" : "");
+                    slot->count = (uint8_t)(slot->count - n);
+                    if (slot->count == 0) {
+                        slot->item = WL_ITEM_NONE;
+                        slot->dur = 0;
+                    }
+                    wl_audio_play_v(&g->audio, WL_SND_THROW, 0.10f);
                 }
             }
         }
@@ -1625,9 +1639,29 @@ static void play_frame(WlGame *g)
         wl_world_advance_time(g->world, dt);
         wl_world_update(g->world, p->pos.x, p->pos.z);
         wl_world_update_drops(g->world, p, dt);
+        if (wl_world_consume_pickups(g->world) > 0)
+            wl_audio_play_v(&g->audio, WL_SND_PICKUP, 0.18f);
         wl_world_update_entities(g->world, p, &g->cfg, &g->audio, dt);
         wl_furnaces_update(g->world, dt);
-        wl_audio_update(&g->audio, dt, wl_world_time(g->world), true);
+        {
+            int fx, fy, fz, kind;
+            while (wl_furnace_pop_event(&fx, &fy, &fz, &kind)) {
+                Vector3 fpos = { fx + 0.5f, fy + 0.5f, fz + 0.5f };
+                Vector3 ear = wl_player_eye(p);
+                wl_audio_play_at(&g->audio,
+                                 kind == 1 ? WL_SND_FURNACE_IGNITE
+                                           : WL_SND_FURNACE_DONE,
+                                 fpos, ear, 28.0f);
+            }
+        }
+        /* underground = no skylight on the player and below cave depth:
+         * drives the cave ambience instead of surface birds/crickets */
+        bool underground =
+            p->pos.y < 56.0f &&
+            wl_light_sky(g->world, (int)p->pos.x, (int)(p->pos.y + 0.5f),
+                         (int)p->pos.z) == 0;
+        wl_audio_update(&g->audio, dt, wl_world_time(g->world), true,
+                        underground);
 
         /* autosave */
         g->autosave_timer += dt;
@@ -1642,6 +1676,19 @@ static void play_frame(WlGame *g)
     wl_renderer_begin(&g->rend, p, &g->cfg, wl_world_time(g->world),
                       p->head_in_water, wl_world_render_distance(g->world));
     BeginDrawing();
+    if (g->demo_itemgallery) {
+        /* test automation: replace the world view with the item audit
+         * (keeps the demo-frame bookkeeping below running so --frames
+         * still ends the run) */
+        wl_renderer_draw_item_gallery(&g->rend);
+        wl_hud_draw(g);
+        wl_inv_ui_draw(g);
+        uitest_maybe_shot(g);
+        EndDrawing();
+        wl_audio_update(&g->audio, GetFrameTime(), 0, false, false);
+        if (g->demo_frames > 0 && --g->demo_frames <= 0) g->quit = true;
+        return;
+    }
     wl_renderer_draw_world(&g->rend, g->world, &g->cfg, wl_world_time(g->world),
                            p->head_in_water);
     wl_renderer_draw_drops(&g->rend, g->world, wl_world_time(g->world));
@@ -1661,6 +1708,9 @@ static void play_frame(WlGame *g)
     if (g->demo_frames > 0) {
         static int diag = 0;
         if (diag++ % 30 == 0) {
+            Vector2 dbg_md = GetMouseDelta();
+            WL_LOGD("demo mouse: delta %.1f,%.1f cursor_hidden=%d overlay=%d",
+                    dbg_md.x, dbg_md.y, (int)IsCursorHidden(), (int)g->overlay);
             WlWorldStats st = wl_world_stats(g->world);
             WL_LOGD("demo pos %.1f,%.1f,%.1f yaw %.2f pitch %.2f drawn %d tris %ld pending %d | "
                     "%.0f fps, %.2f ms avg, worst %.1f ms, rss %d MiB | "
@@ -1694,7 +1744,7 @@ static void paused_frame(WlGame *g)
     wl_menu_pause(g);
     uitest_maybe_shot(g);
     EndDrawing();
-    wl_audio_update(&g->audio, GetFrameTime(), wl_world_time(g->world), false);
+    wl_audio_update(&g->audio, GetFrameTime(), wl_world_time(g->world), false, false);
 }
 
 void wl_game_run_frame(WlGame *g)

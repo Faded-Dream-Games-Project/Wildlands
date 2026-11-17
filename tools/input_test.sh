@@ -297,18 +297,20 @@ PYCHK
 check "placed torch illuminates the night scene" $?
 
 # ---------------------------------------------------------------- run 5
-say "furnace: place it, open the UI, smelt with real clicks"
+say "furnace: place it, open the UI, verify cursor + camera lifecycle"
 find screenshots -name '*.png' ! -name 'README.md-screenshot.png' -delete 2>/dev/null
 rm -rf worlds/FurnUITest
+FLOG=""
+# --time 2500 pins the run to flat midday light so the before/after
+# colour comparison is not confused by sunrise brightening
 DISPLAY=$XVFB_DISP LIBGL_ALWAYS_SOFTWARE=1 ./bin/wildlands \
-    --world FurnUITest --seed 3 --frames 4000 --overlay inv --pitch -30 \
+    --world FurnUITest --seed 3 --frames 4000 --time 2500 --overlay inv --pitch -30 \
     >"$OUT/furn.out" 2>&1 &
 GAME_PID=$!
 for _ in $(seq 1 100); do
     ./tools/xsend $XVFB_DISP Wildlands move 640 360 >/dev/null 2>&1 && break
     sleep 0.2
 done
-FLOG=$(latest_log)
 for _ in $(seq 1 300); do
     FLOG=$(latest_log)
     [ -n "$FLOG" ] && grep -q "demo pos" "$FLOG" 2>/dev/null && break
@@ -321,31 +323,100 @@ sleep 0.6
 sleep 0.6
 ./tools/xsend $XVFB_DISP Wildlands click right 200 # place the furnace
 sleep 2
+./tools/xsend $XVFB_DISP Wildlands key F2 60      # reference frame (no UI)
+sleep 1
 ./tools/xsend $XVFB_DISP Wildlands click right 200 # open the furnace UI
 sleep 1.5
-./tools/xsend $XVFB_DISP Wildlands key F2 60      # screenshot the UI
+# camera must be FROZEN while the UI is open: shake the mouse, compare yaw
+YAW_OPEN_1=$(grep "demo pos" "$FLOG" 2>/dev/null | tail -1 | sed 's/.*yaw \([-0-9.]*\).*/\1/')
+for i in 1 2 3 4 5 6; do ./tools/xsend $XVFB_DISP Wildlands move 900 360; ./tools/xsend $XVFB_DISP Wildlands move 400 360; done
+sleep 2.5
+YAW_OPEN_2=$(grep "demo pos" "$FLOG" 2>/dev/null | tail -1 | sed 's/.*yaw \([-0-9.]*\).*/\1/')
+./tools/xsend $XVFB_DISP Wildlands key F2 60      # screenshot the open UI
+sleep 1
+# E closes the furnace; the camera must respond immediately after
+./tools/xsend $XVFB_DISP Wildlands key e 80
+sleep 0.5
+YAW_CLOSED_1=$(grep "demo pos" "$FLOG" 2>/dev/null | tail -1 | sed 's/.*yaw \([-0-9.]*\).*/\1/')
+for i in 1 2 3 4 5 6 7 8; do ./tools/xsend $XVFB_DISP Wildlands move 1000 360; done
+sleep 2.5
+YAW_CLOSED_2=$(grep "demo pos" "$FLOG" 2>/dev/null | tail -1 | sed 's/.*yaw \([-0-9.]*\).*/\1/')
+./tools/xsend $XVFB_DISP Wildlands key F2 60      # world after closing (blue check)
 sleep 1
 kill $GAME_PID 2>/dev/null; wait $GAME_PID 2>/dev/null; GAME_PID=""
 
-FURN_SHOT=$(ls -t screenshots/*.png 2>/dev/null | head -1)
+grep -q "furnace ui opened" "$FLOG" 2>/dev/null
+check "furnace UI opens on right-click (log)" $?
+
+FURN_SHOT=$(ls -t screenshots/*.png 2>/dev/null | sed -n 2p)
+[ -z "$FURN_SHOT" ] && FURN_SHOT=$(ls -t screenshots/*.png 2>/dev/null | head -1)
 python3 - "$FURN_SHOT" <<'PYCHK'
 import sys
 from PIL import Image
 import numpy as np
 a = np.asarray(Image.open(sys.argv[1]).convert("RGB"), dtype=np.float32)
 h, w, _ = a.shape
-# furnace panel: centered, with the title band and slot structure
-panel = a[int(h*0.30):int(h*0.70), int(w*0.35):int(w*0.65)]
-ok = panel.std() > 14
-print(f"  furnace UI: panel-std={panel.std():.1f}")
-sys.exit(0 if ok else 1)
+# the panel: centered rect with the dim background, slot frames and a
+# light "Furnace" title band near the top of the panel
+panel = a[int(h*0.34):int(h*0.66), int(w*0.40):int(w*0.60)]
+title = a[int(h*0.36):int(h*0.42), int(w*0.40):int(w*0.60)]
+ok_panel = panel.mean() < 110 and panel.std() > 8
+ok_title = (title > 150).sum() > 60
+print(f"  furnace UI: panel mean={panel.mean():.0f} std={panel.std():.1f} title px={(title>150).sum()}")
+sys.exit(0 if ok_panel and ok_title else 1)
 PYCHK
-check "furnace placed and its UI opens on right-click" $?
+check "furnace UI panel + title render (pixels)" $?
+
+python3 - "$YAW_OPEN_1" "$YAW_OPEN_2" <<'PYCHK'
+import sys
+a, b = float(sys.argv[1] or 0), float(sys.argv[2] or 0)
+d = abs(b - a)
+print(f"  camera while UI open: yaw {a:.2f} -> {b:.2f} (moved {d:.2f})")
+sys.exit(0 if d < 0.02 else 1)   # must stay frozen
+PYCHK
+check "camera frozen while the furnace UI is open" $?
+
+# After E: the cursor must be re-locked (hidden) and the overlay gone.
+# Note: synthetic XSendEvent motion is ignored by raylib while the
+# cursor is hidden (X11 grab), so camera turning itself cannot be driven
+# by fake events here; the state machine + stability is verified instead.
+sleep 2.5
+grep -E "demo mouse" "$FLOG" 2>/dev/null | tail -2 | grep -q "cursor_hidden=1 overlay=0"
+check "E closes the furnace and re-locks the cursor (hidden, no overlay)" $?
+
+python3 - "$YAW_CLOSED_1" "$YAW_CLOSED_2" <<'PYCHK'
+import sys
+a, b = float(sys.argv[1] or 0), float(sys.argv[2] or 0)
+d = abs(b - a)
+print(f"  camera stable across close: yaw {a:.2f} -> {b:.2f} (delta {d:.2f})")
+sys.exit(0 if d < 0.05 else 1)  # no jump from cursor warps
+PYCHK
+check "no camera jump when the furnace closes" $?
+
+# the historical "blue blocks" symptom: the held furnace cube (entity
+# shader path, the one that read a bad fog colour) must stay stone-gray,
+# not blue-dominant, after the whole open/close interaction
+WORLD_SHOT=$(ls -t screenshots/*.png 2>/dev/null | head -1)
+python3 - "$WORLD_SHOT" <<'PYCHK'
+import sys
+from PIL import Image
+import numpy as np
+a = np.asarray(Image.open(sys.argv[1]).convert("RGB"), dtype=np.float32)
+h, w, _ = a.shape
+# the held-item region (lower right of centre, below the horizon)
+reg = a[int(h*0.60):int(h*0.92), int(w*0.50):int(w*0.85)]
+r, g, b = reg[:,:,0], reg[:,:,1], reg[:,:,2]
+blue_dom = int(((b > r + 30) & (b > g + 30)).sum())
+print(f"  held-item region after furnace use: blue-dominant px={blue_dom}")
+sys.exit(0 if blue_dom < 3000 else 1)
+PYCHK
+check "held block keeps its colours around furnace interaction (no blue tint)" $?
 
 # ---------------------------------------------------------------- run 6
-say "Q-drop: drop the selected item into the world"
+say "Q-drop: one item with Q, the whole stack with Shift+Q"
 find screenshots -name '*.png' ! -name 'README.md-screenshot.png' -delete 2>/dev/null
 rm -rf worlds/QDropTest
+QLOG=""
 DISPLAY=$XVFB_DISP LIBGL_ALWAYS_SOFTWARE=1 ./bin/wildlands \
     --world QDropTest --seed 3 --frames 4000 --overlay inv --pitch -20 \
     >"$OUT/qdrop.out" 2>&1 &
@@ -354,7 +425,6 @@ for _ in $(seq 1 100); do
     ./tools/xsend $XVFB_DISP Wildlands move 640 360 >/dev/null 2>&1 && break
     sleep 0.2
 done
-QLOG=$(latest_log)
 for _ in $(seq 1 300); do
     QLOG=$(latest_log)
     [ -n "$QLOG" ] && grep -q "demo pos" "$QLOG" 2>/dev/null && break
@@ -364,12 +434,23 @@ sleep 1
 ./tools/xsend $XVFB_DISP Wildlands key e 80       # close inventory
 sleep 0.6
 ./tools/xsend $XVFB_DISP Wildlands key 2 80       # slot 1 = Oak Log x12
-sleep 0.6
-./tools/xsend $XVFB_DISP Wildlands key q 80       # drop the stack
+sleep 0.8
+./tools/xsend $XVFB_DISP Wildlands key q 80       # drop ONE item
 sleep 1.5
-./tools/xsend $XVFB_DISP Wildlands key F2 60      # the logs lie in the world
-sleep 1
+./tools/xsend $XVFB_DISP Wildlands key F2 60
+sleep 0.8
+./tools/xsend $XVFB_DISP Wildlands down Shift_L # hold shift
+sleep 0.2
+./tools/xsend $XVFB_DISP Wildlands key q 80       # drop the WHOLE stack
+sleep 0.4
+./tools/xsend $XVFB_DISP Wildlands up Shift_L
+sleep 1.5
 kill $GAME_PID 2>/dev/null; wait $GAME_PID 2>/dev/null; GAME_PID=""
+
+grep -q "dropped 1 x log$" "$QLOG" 2>/dev/null
+check "Q drops exactly one item from the stack" $?
+grep -qE "dropped 11 x log \(stack\)" "$QLOG" 2>/dev/null
+check "Shift+Q drops the remaining whole stack" $?
 
 Q_SHOT=$(ls -t screenshots/*.png 2>/dev/null | head -1)
 python3 - "$Q_SHOT" <<'PYCHK'
@@ -378,12 +459,77 @@ from PIL import Image
 import numpy as np
 a = np.asarray(Image.open(sys.argv[1]).convert("RGB"), dtype=np.float32)
 r, g, b = a[:,:,0], a[:,:,1], a[:,:,2]
-# dropped oak logs: warm wood colors in the world (not the HUD strip)
 brown = ((r>90)&(r<210)&(g>60)&(g<r-10)&(b<g-8)&(b<r-25))[:640]
-print(f"  dropped logs: wood px={brown.sum()}")
-sys.exit(0 if brown.sum() > 400 else 1)
+print(f"  dropped logs visible: wood px={brown.sum()}")
+sys.exit(0 if brown.sum() > 300 else 1)
 PYCHK
-check "Q drops the selected stack into the world" $?
+check "dropped item appears in the world" $?
+
+# ---------------------------------------------------------------- run 7
+say "held items: sprite items (tools/food) visible in first person"
+find screenshots -name '*.png' ! -name 'README.md-screenshot.png' -delete 2>/dev/null
+rm -rf worlds/HeldTest
+HLOG=""
+DISPLAY=$XVFB_DISP LIBGL_ALWAYS_SOFTWARE=1 ./bin/wildlands \
+    --world HeldTest --seed 3 --frames 4000 --overlay inv --pitch -12 \
+    >"$OUT/held.out" 2>&1 &
+GAME_PID=$!
+for _ in $(seq 1 100); do
+    ./tools/xsend $XVFB_DISP Wildlands move 640 360 >/dev/null 2>&1 && break
+    sleep 0.2
+done
+for _ in $(seq 1 300); do
+    HLOG=$(latest_log)
+    [ -n "$HLOG" ] && grep -q "demo pos" "$HLOG" 2>/dev/null && break
+    sleep 0.2
+done
+sleep 1
+./tools/xsend $XVFB_DISP Wildlands key e 80       # close inventory
+sleep 0.6
+./tools/xsend $XVFB_DISP Wildlands key F2 60      # empty hand reference
+sleep 1
+./tools/xsend $XVFB_DISP Wildlands key 6 80       # slot 5 = Iron Pickaxe
+sleep 1.2
+./tools/xsend $XVFB_DISP Wildlands key F2 60
+sleep 1
+./tools/xsend $XVFB_DISP Wildlands key 7 80       # slot 6 = apple
+sleep 1.2
+./tools/xsend $XVFB_DISP Wildlands key F2 60
+sleep 1
+kill $GAME_PID 2>/dev/null; wait $GAME_PID 2>/dev/null; GAME_PID=""
+
+SHOTS=($(ls -t screenshots/*.png 2>/dev/null | head -3))  # apple, pick, empty
+python3 - "${SHOTS[2]}" "${SHOTS[1]}" <<'PYCHK'
+import sys
+from PIL import Image
+import numpy as np
+empty = np.asarray(Image.open(sys.argv[1]).convert("RGB"), dtype=np.float32)
+pick  = np.asarray(Image.open(sys.argv[2]).convert("RGB"), dtype=np.float32)
+# the lower-right quadrant near the hand position must differ when a
+# pickaxe is held vs the empty hand
+h, w, _ = empty.shape
+region = (slice(int(h*0.55), int(h*0.95)), slice(int(w*0.45), int(w*0.85)))
+diff = np.abs(pick[region] - empty[region]).mean()
+print(f"  held pickaxe vs empty hand: region diff={diff:.1f}")
+sys.exit(0 if diff > 6 else 1)
+PYCHK
+check "held tool sprite renders in first person" $?
+
+python3 - "${SHOTS[2]}" "${SHOTS[0]}" <<'PYCHK'
+import sys
+from PIL import Image
+import numpy as np
+empty = np.asarray(Image.open(sys.argv[1]).convert("RGB"), dtype=np.float32)
+apple = np.asarray(Image.open(sys.argv[2]).convert("RGB"), dtype=np.float32)
+h, w, _ = empty.shape
+region = (slice(int(h*0.55), int(h*0.95)), slice(int(w*0.45), int(w*0.85)))
+diff = np.abs(apple[region] - empty[region]).mean()
+r = apple[region][:,:,0]; g = apple[region][:,:,1]
+red = ((r>150)&(g<110)).sum()
+print(f"  held apple vs empty hand: region diff={diff:.1f}, red px={red}")
+sys.exit(0 if diff > 6 and red > 150 else 1)
+PYCHK
+check "held food sprite renders in first person" $?
 
 say "done"
 exit $fail

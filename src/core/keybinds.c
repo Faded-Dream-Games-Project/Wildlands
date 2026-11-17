@@ -32,7 +32,7 @@ static const WlActionSpec k_actions[] = {
     { WL_ACT_SNEAK,     "sneak",     "Sneak",            KEY_LEFT_SHIFT },
     { WL_ACT_SPRINT,    "sprint",    "Sprint",           KEY_LEFT_CONTROL },
     { WL_ACT_INVENTORY, "inventory", "Inventory",        KEY_E },
-    { WL_ACT_DROP,      "drop",      "Drop Item",        KEY_Q },
+    { WL_ACT_DROP,      "drop",      "Drop Item (Shift: stack)", KEY_Q },
     { WL_ACT_DEBUG,     "debug",     "Debug Overlay",    KEY_F3 },
     { WL_ACT_SCREENSHOT,"screenshot","Screenshot",       KEY_F2 },
     { WL_ACT_PAUSE,     "pause",     "Pause Menu",       KEY_ESCAPE },

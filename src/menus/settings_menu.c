@@ -211,6 +211,13 @@ void wl_menu_settings(WlGame *g)
             y += 42;
         }
 
+        /* modifier hints that do not need their own binding */
+        y += 6;
+        wl_ui_label(&g->ui, (Rectangle){ x, y, w, 30 },
+                    "Hold Shift while dropping to throw the whole stack",
+                    (Color){ 165, 172, 182, 255 }, false);
+        y += 34;
+
         /* capture the next key press for the binding being edited */
         if (g->rebinding_action >= 0) {
             int newkey = GetKeyPressed();

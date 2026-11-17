@@ -274,7 +274,7 @@ void wl_renderer_shutdown(WlRenderer *r)
         UnloadMesh(r->cloud_mesh);
         r->cloud_ok = false;
     }
-    for (int i = 0; i < 256; i++) {
+    for (int i = 0; i < WL_ITEM_MAX; i++) {
         if (r->item_mesh_ok[i]) {
             UnloadMesh(r->item_mesh[i]);
             r->item_mesh_ok[i] = false;
@@ -518,7 +518,8 @@ static void item_face(float *pos, float *uv, unsigned char *col, unsigned short 
 
 static const Mesh *item_mesh(WlRenderer *r, WlItemId item)
 {
-    if (item == WL_ITEM_NONE || item >= 256 || !wl_item_valid(item)) return NULL;
+    if (item == WL_ITEM_NONE || item >= WL_ITEM_MAX || !wl_item_valid(item))
+        return NULL;
     if (r->item_mesh_ok[item]) return &r->item_mesh[item];
 
     const WlItem *def = wl_item_get(item);
@@ -528,6 +529,11 @@ static const Mesh *item_mesh(WlRenderer *r, WlItemId item)
         blk = wl_block_get(def->block_id);
         if (!blk) return NULL;
         if (blk->shape != WL_RENDER_CROSS) tile = -2; /* full cube */
+        else tile = blk->tex[0];                      /* cross sprite  */
+    } else {
+        /* pure item: its icon tile as a flat sprite */
+        if (def->tile == 0) return NULL; /* no icon (should not happen) */
+        tile = def->tile;
     }
     if (tile >= 0 || tile == -2) {
         /* build */
@@ -890,8 +896,16 @@ static void ent_set_uniforms(WlRenderer *r, float light, float hurt)
         SetShaderValue(sh, loc->entity_light, &light, SHADER_UNIFORM_FLOAT);
     if (loc->hurt_flash >= 0)
         SetShaderValue(sh, loc->hurt_flash, &hurt, SHADER_UNIFORM_FLOAT);
-    if (loc->fog_color >= 0)
-        SetShaderValue(sh, loc->fog_color, &r->fog_color, SHADER_UNIFORM_VEC3);
+    if (loc->fog_color >= 0) {
+        /* WlRenderer::fog_color is a raylib Color (4 bytes); the shader
+         * wants a vec3 of floats. Passing &fog_color directly reads 8
+         * bytes past the struct and uploads garbage as the fog colour —
+         * driver-dependent (blue-tinted entities on some machines, black
+         * fog on others). */
+        float c[3] = { r->fog_color.r / 255.0f, r->fog_color.g / 255.0f,
+                       r->fog_color.b / 255.0f };
+        SetShaderValue(sh, loc->fog_color, c, SHADER_UNIFORM_VEC3);
+    }
     if (loc->fog_range >= 0) {
         float range[2] = { r->fog_near, r->fog_far };
         SetShaderValue(sh, loc->fog_range, range, SHADER_UNIFORM_VEC2);
@@ -1091,4 +1105,52 @@ void wl_renderer_draw_break_overlay(WlRenderer *r, struct WlWorld *w,
                                MatrixTranslate(pos.x, pos.y, pos.z));
     DrawMesh(*m, r->mat_item, tf);
     EndMode3D();
+}
+
+
+/* ------------------------------------------------------------------ */
+/* item gallery (test automation)                                      */
+/* ------------------------------------------------------------------ */
+
+void wl_renderer_draw_item_gallery(WlRenderer *r)
+{
+    int cols = 12;
+    float spacing = 1.6f;
+    int count = wl_items_count();
+
+    Camera3D cam;
+    cam.position = (Vector3){ cols * spacing * 0.5f, 10.0f, -14.0f };
+    cam.target = (Vector3){ cols * spacing * 0.5f, 5.0f, 0.0f };
+    cam.up = (Vector3){ 0, 1, 0 };
+    cam.fovy = 55.0f;
+    cam.projection = CAMERA_PERSPECTIVE;
+
+    ClearBackground((Color){ 34, 36, 44, 255 });
+    BeginMode3D(cam);
+
+    int built = 0, missing = 0;
+    for (int id = 1; id < count; id++) {
+        const WlItem *def = wl_item_get((WlItemId)id);
+        if (!def || wl_str_eq(def->name, "reserved")) continue;
+        const Mesh *m = item_mesh(r, (WlItemId)id);
+        if (!m || m->vertexCount == 0) {
+            missing++;
+            WL_LOGW("item gallery: %s (id %d) has NO mesh", def->name, id);
+            continue;
+        }
+        built++;
+        int i = built - 1;
+        float x = (float)(i % cols) * spacing;
+        float z = (float)(i / cols) * spacing;
+        Matrix tf = MatrixMultiply(MatrixScale(1.1f, 1.1f, 1.1f),
+                                   MatrixRotateY(0.7f));
+        tf = MatrixMultiply(tf, MatrixTranslate(x, 1.4f, z));
+        ent_set_uniforms(r, 1.0f, 0.0f);
+        DrawMesh(*m, r->mat_item, tf);
+        /* a small floor pad under each item so empty slots are visible */
+        DrawCubeWires((Vector3){ x, 0.0f, z }, 1.0f, 0.05f, 1.0f,
+                      (Color){ 90, 96, 110, 255 });
+    }
+    EndMode3D();
+    WL_LOGI("item gallery: %d item meshes drawn, %d missing", built, missing);
 }

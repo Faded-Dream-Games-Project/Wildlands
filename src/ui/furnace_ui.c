@@ -6,6 +6,7 @@
 #include "wl/world.h"
 #include "wl/furnace_ui.h"
 #include "wl/audio.h"
+#include "wl/log.h"
 
 #include <string.h>
 
@@ -14,11 +15,36 @@ static int s_fx, s_fy, s_fz;
 
 void wl_furnace_ui_open(WlGame *g, int x, int y, int z)
 {
+    /* the block-entity record is created lazily on first open; without
+     * it the draw below would instantly self-close the overlay — after
+     * the cursor had already been released, leaving the game with a
+     * free cursor and no UI (the "furnace eats my mouse" bug) */
+    if (!wl_world_get_furnace(g->world, x, y, z, true)) {
+        WL_LOGW("furnace store full; not opening the UI at %d,%d,%d",
+                x, y, z);
+        return;
+    }
     s_fx = x;
     s_fy = y;
     s_fz = z;
     g->overlay = WL_OVERLAY_FURNACE;
     EnableCursor();
+    WL_LOGI("furnace ui opened at %d,%d,%d", x, y, z);
+}
+
+void wl_furnace_ui_close(WlGame *g)
+{
+    if (g->overlay != WL_OVERLAY_FURNACE) return;
+    /* the cursor stack returns to the inventory (never lost) */
+    if (g->ui_held.item != WL_ITEM_NONE) {
+        if (wl_inv_add(&g->player.inv, g->ui_held.item, g->ui_held.count,
+                       g->ui_held.dur)) {
+            g->ui_held.item = WL_ITEM_NONE;
+            g->ui_held.count = 0;
+            g->ui_held.dur = 0;
+        }
+    }
+    g->overlay = WL_OVERLAY_NONE;
 }
 
 void wl_furnace_ui_draw(WlGame *g)
@@ -26,8 +52,10 @@ void wl_furnace_ui_draw(WlGame *g)
     if (g->overlay != WL_OVERLAY_FURNACE) return;
     WlFurnace *f = wl_world_get_furnace(g->world, s_fx, s_fy, s_fz, false);
     if (!f) {
-        /* the furnace was broken underneath us */
-        g->overlay = WL_OVERLAY_NONE;
+        /* the furnace was broken underneath us: close properly so the
+         * cursor state stays consistent (the caller re-locks it) */
+        wl_furnace_ui_close(g);
+        DisableCursor();
         return;
     }
 
