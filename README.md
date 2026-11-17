@@ -61,6 +61,19 @@ identity. Build, explore, survive, and create.
   ingredient-group recipes.
 - **Persistent worlds** — create/select/delete with confirmation, atomic
   crash-safe saves, autosave, full inventory persistence.
+- **Water** — sources spread and pour with scheduled neighbour updates
+  (finite levels, chunk-crossing, damming and source removal dry up the
+  flow, persists in saves).
+- **3D held items** — tools are real box models (pickaxe / axe / shovel /
+  sword in wood, stone, iron and diamond, plus a torch and extruded food
+  sprites) with walk bob, idle sway, landing dip, equip dip and action
+  swings driven by player state — never by raw mouse movement.
+- **Creative catalogue** — the inventory in creative mode becomes a
+  tabbed catalogue of every obtainable item (building / nature / tools /
+  food / materials) with a search field; clicking takes stacks, right
+  click takes one, clicking with a held stack trashes it.
+- **Combined furnace UI** — input, fuel, output, the player inventory
+  and hotbar in one screen with shift-click quick transfer.
 - **Full settings** — video / audio / controls / gameplay tabs, rebindable
   keys, live-applied changes, persisted to `config/`.
 - **Modding from day one** — native C mods with a versioned API,
@@ -110,7 +123,10 @@ does not jump, icons and held items follow hotbar selection, mined blocks
 appear in the hotbar, a placed torch illuminates a night scene, the
 the furnace UI opens and closes cleanly around a camera-lifecycle
 check, Q drops one item while Shift+Q drops the stack, and held tool/
-food sprites render in first person (18 checks).
+food sprites render in first person (18 checks). Unit tests cover the
+water propagation rules, drops, inventory and crafting (588 checks);
+the in-game selftest adds 48 checks including water flow and the death
+animation.
 
 `tools/repro_render.sh` and `tools/verify_battery.sh` reproduce and
 regression-test the render pipeline against camera-motion artifacts

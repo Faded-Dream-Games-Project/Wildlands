@@ -121,6 +121,7 @@ typedef struct WlGame {
     int demo_overlay;           /* 0 none, 2 inventory, 3 crafting table */
     int demo_time;              /* >= 0: jump world time at entry (--time) */
     bool demo_itemgallery;      /* --itemgallery: audit view of every item mesh */
+    bool demo_zoo;              /* --zoo: spawn one of each animal around the player */
     /* demo camera direction (--yaw/--pitch degrees, applied at world entry) */
     bool demo_dir_set;
     float demo_yaw, demo_pitch;

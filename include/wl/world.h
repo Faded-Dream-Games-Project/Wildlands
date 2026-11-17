@@ -36,6 +36,10 @@ typedef struct WlFurnace {
 
 #define WL_FURNACES_MAX 64
 
+/* water propagation: queue capacity and the re-spread delay (seconds) */
+#define WL_WATER_QUEUE_MAX 4096
+#define WL_WATER_DELAY 0.25f
+
 /* A stack of items lying in the world (death drops). */
 typedef struct WlDrop {
     WlItemId item;   /* what to pick up                      */
@@ -136,6 +140,15 @@ void wl_world_load_furnaces(WlWorld *w);
  * false when the drop list is full (caller retries later). */
 bool wl_world_add_drop(WlWorld *w, WlItemId item, uint8_t count, uint16_t dur,
                        Vector3 pos);
+/* Queues a water re-evaluation for the cell (world coordinates). */
+void wl_world_schedule_water(WlWorld *w, int x, int y, int z, float delay);
+/* Advances water propagation by dt seconds (bounded work per call). */
+void wl_world_water_tick(WlWorld *w, float dt);
+/* Number of queued water updates (test/diagnostic hook). */
+int wl_world_water_pending(const WlWorld *w);
+/* Schedules dropped because the queue was full (diagnostic). */
+int wl_world_water_dropped(const WlWorld *w);
+
 /* Number of item pickups since the last call (drives the pickup sound;
  * resets the counter). */
 int wl_world_consume_pickups(WlWorld *w);

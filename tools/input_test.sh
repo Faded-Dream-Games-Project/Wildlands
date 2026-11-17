@@ -359,7 +359,7 @@ h, w, _ = a.shape
 # the panel: centered rect with the dim background, slot frames and a
 # light "Furnace" title band near the top of the panel
 panel = a[int(h*0.34):int(h*0.66), int(w*0.40):int(w*0.60)]
-title = a[int(h*0.36):int(h*0.42), int(w*0.40):int(w*0.60)]
+title = a[int(h*0.21):int(h*0.27), int(w*0.40):int(w*0.60)]  # taller combined panel
 ok_panel = panel.mean() < 110 and panel.std() > 8
 ok_title = (title > 150).sum() > 60
 print(f"  furnace UI: panel mean={panel.mean():.0f} std={panel.std():.1f} title px={(title>150).sum()}")

@@ -297,10 +297,10 @@ void wl_player_update(WlPlayer *p, WlWorld *w, const WlKeybinds *kb,
                                         (int)floorf(p->pos.y + 0.3f), (int)floorf(p->pos.z));
     uint8_t b_head = wl_world_get_block(w, (int)floorf(eye.x),
                                         (int)floorf(eye.y), (int)floorf(eye.z));
-    bool now_water = (b_feet == WL_BLOCK_WATER);
+    bool now_water = wl_blocks_liquid(b_feet);
     if (now_water && !p->in_water) wl_audio_play(audio, WL_SND_SPLASH);
     p->in_water = now_water;
-    p->head_in_water = (b_head == WL_BLOCK_WATER);
+    p->head_in_water = wl_blocks_liquid(b_head);
 
     /* --- input --- */
     bool want_forward = false, want_back = false, want_left = false, want_right = false;

@@ -83,6 +83,16 @@ struct WlWorld {
      * drained by the game loop every frame */
     int pickup_sfx_pending;
 
+    /* scheduled water updates: positions with a due time; processed a
+     * bounded number per frame so propagation never stalls the loop */
+    struct {
+        int32_t x, y, z;
+        float due;
+    } water_q[WL_WATER_QUEUE_MAX];
+    int water_qn;
+    int water_dropped;
+    float water_time;
+
     /* generation worker */
     bool thread_ok;
     pthread_t thread;
@@ -388,6 +398,133 @@ bool wl_world_solid_at(WlWorld *w, int x, int y, int z)
     return wl_block_is_solid(wl_world_get_block(w, x, y, z));
 }
 
+/* ------------------------------------------------------------------ */
+/* water propagation                                                    */
+/* ------------------------------------------------------------------ */
+
+static int water_level_of(uint8_t id)
+{
+    if (id == WL_BLOCK_WATER) return 8;
+    return wl_water_flow_level(id); /* 1..7, or 0 */
+}
+
+/* blocks that flowing water may replace (air + small plants) */
+static bool water_replaceable(uint8_t id)
+{
+    return id == WL_BLOCK_AIR || id == WL_BLOCK_TALLGRASS ||
+           id == WL_BLOCK_FLOWER_RED || id == WL_BLOCK_FLOWER_YELLOW;
+}
+
+void wl_world_schedule_water(WlWorld *w, int x, int y, int z, float delay)
+{
+    if (!w || y < 0 || y >= WL_CHUNK_H) return;
+    if (w->water_qn >= WL_WATER_QUEUE_MAX) {
+        w->water_dropped++;
+        return; /* drop: bounded */
+    }
+    /* coalesce repeats for the same cell */
+    for (int i = 0; i < w->water_qn; i++) {
+        if (w->water_q[i].x == x && w->water_q[i].y == y &&
+            w->water_q[i].z == z) {
+            if (w->water_time + delay < w->water_q[i].due)
+                w->water_q[i].due = w->water_time + delay;
+            return;
+        }
+    }
+    w->water_q[w->water_qn].x = (int32_t)x;
+    w->water_q[w->water_qn].y = (int32_t)y;
+    w->water_q[w->water_qn].z = (int32_t)z;
+    w->water_q[w->water_qn].due = w->water_time + delay;
+    w->water_qn++;
+}
+
+/* processes one water cell: dries orphaned flows, pours down, spreads
+ * sideways with decreasing level. Levels decrease monotonically along
+ * any spread path, so propagation is finite by construction. */
+static void water_process(WlWorld *w, int x, int y, int z)
+{
+    uint8_t id = wl_world_get_block(w, x, y, z);
+    int lvl = water_level_of(id);
+    if (lvl == 0) return;
+
+    /* flow without a supplier dries up (source removal) */
+    if (lvl < 8) {
+        bool supplied = water_level_of(wl_world_get_block(w, x, y + 1, z)) > 0;
+        if (!supplied) {
+            int best = 0;
+            static const int sdx[4] = { 1, -1, 0, 0 };
+            static const int sdz[4] = { 0, 0, 1, -1 };
+            for (int i = 0; i < 4; i++) {
+                int nl = water_level_of(
+                    wl_world_get_block(w, x + sdx[i], y, z + sdz[i]));
+                if (nl > best) best = nl;
+            }
+            supplied = best > lvl;
+        }
+        if (!supplied) {
+            wl_world_set_block(w, x, y, z, WL_BLOCK_AIR);
+            wl_world_schedule_water(w, x + 1, y, z, WL_WATER_DELAY);
+            wl_world_schedule_water(w, x - 1, y, z, WL_WATER_DELAY);
+            wl_world_schedule_water(w, x, y, z + 1, WL_WATER_DELAY);
+            wl_world_schedule_water(w, x, y, z - 1, WL_WATER_DELAY);
+            wl_world_schedule_water(w, x, y - 1, z, WL_WATER_DELAY);
+            return;
+        }
+    }
+
+    /* pour down first (falling water keeps full strength) */
+    if (y > 0) {
+        uint8_t below = wl_world_get_block(w, x, y - 1, z);
+        if (water_replaceable(below)) {
+            wl_world_set_block(w, x, y - 1, z, wl_water_flow_id(7));
+            wl_world_schedule_water(w, x, y - 1, z, WL_WATER_DELAY);
+            return;
+        }
+    }
+
+    /* spread sideways with a weaker level */
+    if (lvl > 1) {
+        static const int sdx[4] = { 1, -1, 0, 0 };
+        static const int sdz[4] = { 0, 0, 1, -1 };
+        for (int i = 0; i < 4; i++) {
+            int nx = x + sdx[i], nz = z + sdz[i];
+            uint8_t nb = wl_world_get_block(w, nx, y, nz);
+            if (water_replaceable(nb)) {
+                wl_world_set_block(w, nx, y, nz, wl_water_flow_id(lvl - 1));
+                wl_world_schedule_water(w, nx, y, nz, WL_WATER_DELAY);
+            }
+        }
+    }
+}
+
+int wl_world_water_dropped(const WlWorld *w)
+{
+    return w ? w->water_dropped : 0;
+}
+
+int wl_world_water_pending(const WlWorld *w)
+{
+    return w ? w->water_qn : 0;
+}
+
+void wl_world_water_tick(WlWorld *w, float dt)
+{
+    if (!w) return;
+    w->water_time += dt;
+    int budget = 96; /* bounded work per frame */
+    int i = 0;
+    while (i < w->water_qn && budget > 0) {
+        if (w->water_q[i].due <= w->water_time) {
+            int x = w->water_q[i].x, y = w->water_q[i].y, z = w->water_q[i].z;
+            w->water_q[i] = w->water_q[--w->water_qn]; /* swap-remove */
+            water_process(w, x, y, z);
+            budget--;
+        } else {
+            i++;
+        }
+    }
+}
+
 bool wl_world_set_block(WlWorld *w, int x, int y, int z, uint8_t id)
 {
     if (y < 0 || y >= WL_CHUNK_H) return false;
@@ -402,6 +539,19 @@ bool wl_world_set_block(WlWorld *w, int x, int y, int z, uint8_t id)
     c->modified = true;
     c->dirty_mesh = true;
     c->light_dirty = true; /* torch placed/broken, skylight column changed */
+
+    /* water reacts to the change: any liquid neighbour (and the cell
+     * itself when it became liquid) re-evaluates on the next tick */
+    {
+        static const int d6[6][3] = { {1,0,0},{-1,0,0},{0,1,0},{0,-1,0},{0,0,1},{0,0,-1} };
+        for (int i = 0; i < 6; i++) {
+            int nx = x + d6[i][0], ny = y + d6[i][1], nz = z + d6[i][2];
+            if (wl_blocks_liquid(wl_world_get_block(w, nx, ny, nz)))
+                wl_world_schedule_water(w, nx, ny, nz, WL_WATER_DELAY);
+        }
+        if (wl_blocks_liquid(id))
+            wl_world_schedule_water(w, x, y, z, WL_WATER_DELAY);
+    }
 
     if (lx == 0) {
         WlChunk *n = wl_world_chunk_at(w, cx - 1, cz);

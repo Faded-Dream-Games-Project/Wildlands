@@ -107,6 +107,9 @@ typedef struct WlAssets WlAssets;
 /* root = the assets/ directory. Loads the base set immediately. */
 WlAssets *wl_assets_create(const char *root);
 void wl_assets_destroy(WlAssets *a);
+/* Re-load sounds/music that failed at startup because the audio device
+ * was not initialized yet (deferred init). Call after the device is up. */
+int wl_assets_reload_audio(WlAssets *a);
 
 /* Mods append tiles before finalize; returns the tile index or -1. */
 int wl_assets_add_tile(WlAssets *a, const char *png_path, const char *rel_base);

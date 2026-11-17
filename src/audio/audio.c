@@ -74,8 +74,12 @@ static bool snd_ready(WlAudio *a, WlSndId id)
 
 static void play_bus(WlAudio *a, WlSndId id, float pitch_var, float vol_mult)
 {
-    if (!snd_ready(a, id)) return;
-    if (!wl_assets_snd_ok(a->assets, id)) return; /* missing asset: silent */
+    if (!snd_ready(a, id)) { a->play_reject++; return; }
+    if (!wl_assets_snd_ok(a->assets, id)) {
+        a->play_reject++;
+        WL_LOGD("audio: play requested but sound %d not loaded", (int)id);
+        return; /* missing asset: silent */
+    }
     Sound s = wl_assets_snd(a->assets, id);
     float pitch = 1.0f;
     if (pitch_var > 0.0f)
@@ -85,6 +89,7 @@ static void play_bus(WlAudio *a, WlSndId id, float pitch_var, float vol_mult)
     SetSoundPitch(s, pitch);
     SetSoundVolume(s, a->vol_master * a->vol_sfx * vol_mult);
     PlaySound(s);
+    a->play_count++;
 }
 
 void wl_audio_play(WlAudio *a, WlSndId id)
@@ -117,6 +122,7 @@ void wl_audio_ambient(WlAudio *a, WlSndId id)
     SetSoundPitch(s, 1.0f);
     SetSoundVolume(s, a->vol_master * a->vol_ambient);
     PlaySound(s);
+    a->play_count++;
 }
 
 void wl_audio_stop_sfx(WlAudio *a)

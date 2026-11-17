@@ -38,6 +38,7 @@ typedef struct WlEntity {
     float attack_cd;     /* melee cooldown */
     float shoot_cd;      /* skeleton bow cooldown */
     float hurt_flash;    /* seconds of red tint left */
+    float death_timer;   /* > 0: dying (fall-over animation), counts down */
     float wander_timer;  /* animal: until next heading change */
     float despawn_timer; /* far-away despawn accumulator */
     float age;           /* seconds alive */

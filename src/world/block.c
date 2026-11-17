@@ -41,8 +41,19 @@ void wl_block_set_drop(WlBlockId id, uint16_t drop_item)
     g_blocks[id].drop_item = drop_item;
 }
 
+/* shared definition for flowing water (fixed high ids, never part of
+ * the sequential registry so mod ids and old saves stay stable) */
+static const WlBlock s_water_flow_def = {
+    .name = "water_flow", .display = "Flowing Water",
+    .tex = { TILE_WATER, TILE_WATER, TILE_WATER,
+             TILE_WATER, TILE_WATER, TILE_WATER },
+    .shape = WL_RENDER_LIQUID, .solid = false, .opaque = false,
+    .unbreakable = true,
+};
+
 const WlBlock *wl_block_get(WlBlockId id)
 {
+    if (wl_water_flow_level(id) > 0) return &s_water_flow_def;
     if (id == 0 || id >= g_block_count) return NULL;
     return &g_blocks[id];
 }
@@ -137,6 +148,7 @@ void wl_blocks_init(void)
         .shape = WL_RENDER_LIQUID, .solid = false, .opaque = false,
         .unbreakable = true,
     });
+
 
     reg(WL_BLOCK_GLASS, (WlBlock){
         .name = "glass", .display = "Glass", .tex = T6(TILE_GLASS),
@@ -299,4 +311,10 @@ void wl_blocks_init(void)
 
     g_blocks_initialized = true;
     WL_LOGI("block registry: %d base blocks", g_block_count);
+}
+
+
+bool wl_blocks_liquid(uint8_t id)
+{
+    return id == WL_BLOCK_WATER || wl_water_flow_level(id) > 0;
 }

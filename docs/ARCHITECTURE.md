@@ -141,6 +141,40 @@ wl_game_run_frame
   furnace_lit (which emits light 13). Contents persist in
   `furnaces.dat`; breaking a furnace drops its stacks.
 
+## Water propagation
+
+- Flowing water uses seven fixed block ids (240..246, see `block.h`)
+  instead of joining the sequential registry, so mod block ids and old
+  saves stay stable; `wl_block_get` special-cases them to a shared
+  liquid definition.
+- `wl_world_set_block` schedules liquid neighbours into a per-world
+  queue; `wl_world_water_tick` processes a bounded number of due cells
+  per frame (pour down first, then sideways spread with decreasing
+  level; orphaned flows dry up). Levels decrease monotonically, so
+  propagation is finite by construction. World generation writes chunk
+  arrays directly and never triggers updates.
+
+## Held-item presentation
+
+- Tools build layered box models (handle + head per tool kind, tier
+  palette) sampled from a dedicated white atlas tile (`TILE_SOLID_WHITE`
+  = 250); food/material icons are extruded sprites; torches are a stick
+  plus glowing tip. All cached in the `WL_ITEM_MAX`-sized mesh cache.
+- Animation state lives in `WlRenderer::held`: a damped spring for
+  camera-turn lag, walk/run bob from the player cycle, idle breathing,
+  landing and equip dips, and swing arcs retriggered by
+  `WlPlayer::action_swing` (attack / place / eat) or mining.
+
+## Entity models
+
+- All 23 entity-atlas tiles (see `assets/textures/entities.txt`) are
+  wired to layered box parts: humanoid (zombie/skeleton), quadruped
+  (cow/pig/sheep with distinct proportions), spider (body + 8 side
+  legs), chicken (body + wings + legs), arrow. Walk swing, wing flap,
+  spider-leg wiggle, idle breathing, head tracking, grazing, hurt flash
+  and a fall-over death animation are driven by entity state
+  (`anim_phase`, `live_ticks`, `death_timer`).
+
 ## Audio
 
 - `src/audio/audio.c`: graceful (runs silent without a device), four

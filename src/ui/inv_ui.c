@@ -1,6 +1,7 @@
 /* inv_ui.c — inventory screen with drag & drop, crafting grid and result. */
 #include "wl/inv_ui.h"
 #include "wl/game.h"
+#include "wl/world.h"
 #include "wl/crafting.h"
 #include "wl/item.h"
 #include "wl/audio.h"
@@ -228,6 +229,180 @@ static void slot_click(WlGame *g, SlotRef ref, bool right, bool shift)
     wl_audio_play(&g->audio, WL_SND_CLICK);
 }
 
+/* ------------------------------------------------------------------ */
+/* creative item catalogue                                              */
+/* ------------------------------------------------------------------ */
+
+typedef enum {
+    CAT_BLOCKS = 0,
+    CAT_NATURE,
+    CAT_TOOLS,
+    CAT_FOOD,
+    CAT_MATERIALS,
+    CAT_COUNT
+} CatId;
+
+static const char *k_cat_names[CAT_COUNT] = {
+    "Building", "Nature", "Tools", "Food", "Materials"
+};
+
+static int item_category(WlItemId id)
+{
+    const WlItem *d = wl_item_get(id);
+    if (!d) return -1;
+    if (d->tool != WL_TOOL_NONE) return CAT_TOOLS;
+    if (d->food > 0) return CAT_FOOD;
+    if (!d->is_block) return CAT_MATERIALS;
+    const char *n = d->name;
+    if (strstr(n, "flower") || strstr(n, "grass") || strstr(n, "log") ||
+        strstr(n, "leaves") || strstr(n, "cactus") || strstr(n, "sand") ||
+        strstr(n, "snow") || strstr(n, "ice") || strstr(n, "gravel") ||
+        strstr(n, "dirt"))
+        return CAT_NATURE;
+    return CAT_BLOCKS;
+}
+
+/* obtainable in creative: everything registered except the unobtainable
+ * water shadow item and the lit furnace (a running state, not a item) */
+static bool catalogue_visible(WlItemId id)
+{
+    const WlItem *d = wl_item_get(id);
+    if (!d) return false;
+    if (strcmp(d->name, "water") == 0) return false;
+    if (strcmp(d->name, "furnace_lit") == 0) return false;
+    return true;
+}
+
+static int s_cat_tab = CAT_BLOCKS;
+static float s_cat_scroll = 0.0f;
+static char s_cat_search[24] = "";
+
+static void str_lower(char *dst, const char *src, size_t cap)
+{
+    size_t i = 0;
+    for (; src[i] && i + 1 < cap; i++)
+        dst[i] = (src[i] >= 'A' && src[i] <= 'Z') ? (char)(src[i] + 32) : src[i];
+    dst[i] = '\0';
+}
+
+/* draws the catalogue: category tabs, a search field and a scrollable
+ * grid of every obtainable item, on top of the player inventory rows */
+static void draw_catalogue(WlGame *g, Rectangle area)
+{
+    WlUi *ui = &g->ui;
+    float cell = area.width / 9.0f;
+
+    /* tabs */
+    Font f = wl_ui_font(ui);
+    float tab_fs = 15.0f * ui->scale;
+    float tx = area.x;
+    for (int c = 0; c < CAT_COUNT; c++) {
+        const char *name = k_cat_names[c];
+        Vector2 ts = MeasureTextEx(f, name, tab_fs, 1.0f);
+        Rectangle tr = { tx, area.y, ts.x + 18.0f * ui->scale,
+                         24.0f * ui->scale };
+        bool active = (s_cat_tab == c);
+        DrawRectangleRec(tr, active ? (Color){ 74, 78, 88, 255 }
+                                    : (Color){ 44, 46, 52, 255 });
+        DrawTextEx(f, name, (Vector2){ tr.x + 9 * ui->scale, tr.y + 4 },
+                   tab_fs, 1.0f, active ? (Color){ 240, 236, 190, 255 }
+                                        : (Color){ 165, 172, 182, 255 });
+        if (CheckCollisionPointRec(ui->mouse, tr) && ui->mouse_pressed) {
+            s_cat_tab = c;
+            s_cat_scroll = 0.0f;
+        }
+        tx += tr.width + 6.0f * ui->scale;
+    }
+
+    /* search field (top right) */
+    Rectangle search_r = { area.x + area.width - 170.0f * ui->scale,
+                           area.y + 28.0f * ui->scale,
+                           170.0f * ui->scale, 26.0f * ui->scale };
+    DrawTextEx(f, "search:", (Vector2){ search_r.x - 52 * ui->scale,
+                                        search_r.y + 5 }, tab_fs, 1.0f,
+               (Color){ 165, 172, 182, 255 });
+    wl_ui_textfield(ui, 77, search_r, s_cat_search, sizeof(s_cat_search));
+
+    /* collect the visible items for the active tab + search filter */
+    WlItemId list[WL_ITEM_MAX];
+    int n = 0;
+    char needle[24];
+    str_lower(needle, s_cat_search, sizeof(needle));
+    int total = wl_items_count();
+    for (WlItemId id = 1; id < (WlItemId)total && n < WL_ITEM_MAX; id++) {
+        if (!catalogue_visible(id)) continue;
+        if (item_category(id) != s_cat_tab) continue;
+        if (needle[0]) {
+            char hay[64];
+            str_lower(hay, wl_item_get(id)->display, sizeof(hay));
+            if (!strstr(hay, needle)) continue;
+        }
+        list[n++] = id;
+    }
+
+    /* scrollable grid */
+    int cols = 9;
+    int rows = (n + cols - 1) / cols;
+    Rectangle grid_r = { area.x, area.y + 60.0f * ui->scale,
+                         area.width, cell * 3 };
+    if (CheckCollisionPointRec(ui->mouse, grid_r))
+        s_cat_scroll -= ui->wheel * cell;
+    float max_scroll = (rows - 3) * cell;
+    if (max_scroll < 0.0f) max_scroll = 0.0f;
+    if (s_cat_scroll < 0.0f) s_cat_scroll = 0.0f;
+    if (s_cat_scroll > max_scroll) s_cat_scroll = max_scroll;
+
+    /* border + clip region */
+    DrawRectangleRec(grid_r, (Color){ 30, 32, 36, 255 });
+    DrawRectangleLinesEx(grid_r, 2.0f, (Color){ 70, 74, 82, 255 });
+    int first_row = (int)(s_cat_scroll / cell);
+    int y0 = (int)(grid_r.y - (s_cat_scroll - first_row * cell));
+    for (int row = first_row; row <= first_row + 3 && row < rows; row++) {
+        for (int col = 0; col < cols; col++) {
+            int idx = row * cols + col;
+            if (idx >= n) break;
+            WlItemId id = list[idx];
+            Rectangle r = { grid_r.x + col * cell + 2,
+                            y0 + (row - first_row) * cell + 2,
+                            cell - 4, cell - 4 };
+            if (r.y + r.height <= grid_r.y || r.y >= grid_r.y + grid_r.height)
+                continue; /* clipped */
+            WlSlot display = { id, 1, 0 };
+            wl_ui_draw_slot_item(ui, r, &display);
+            if (CheckCollisionPointRec(ui->mouse, r)) {
+                DrawRectangleLinesEx((Rectangle){ r.x - 1, r.y - 1,
+                                                 r.width + 2, r.height + 2 },
+                                     2.0f, (Color){ 240, 236, 190, 220 });
+                if (!ui->mouse_down) {
+                    const WlItem *item = wl_item_get(id);
+                    if (item) wl_ui_tooltip(ui, item->display);
+                }
+                /* left: take a full stack (or trash the held one);
+                 * right: take a single item */
+                if (ui->mouse_pressed) {
+                    if (g->ui_held.item != WL_ITEM_NONE) {
+                        g->ui_held.item = WL_ITEM_NONE; /* creative trash */
+                        g->ui_held.count = 0;
+                        g->ui_held.dur = 0;
+                    } else {
+                        const WlItem *def = wl_item_get(id);
+                        g->ui_held = (WlSlot){ id,
+                                (uint8_t)(def ? def->max_stack : 64), 0 };
+                    }
+                    wl_audio_play(&g->audio, WL_SND_CLICK);
+                } else if (ui->mouse_right_pressed) {
+                    if (g->ui_held.item == WL_ITEM_NONE)
+                        g->ui_held = (WlSlot){ id, 1, 0 };
+                    wl_audio_play(&g->audio, WL_SND_CLICK);
+                }
+            }
+        }
+    }
+    if (n == 0)
+        DrawTextEx(f, "nothing matches", (Vector2){ grid_r.x + 12, grid_r.y + 12 },
+                   tab_fs, 1.0f, (Color){ 140, 144, 152, 255 });
+}
+
 void wl_inv_ui_close(WlGame *g)
 {
     /* return crafting grid + held stack to the inventory (never lost) */
@@ -261,36 +436,51 @@ void wl_inv_ui_draw(WlGame *g)
 
     int sw = GetScreenWidth(), sh = GetScreenHeight();
     WlInventory *inv = &g->player.inv;
-    int cw = inv->craft_w;
+    bool creative = (g->overlay == WL_OVERLAY_INVENTORY) &&
+                    wl_world_gamemode(g->world) == WL_WORLD_GAMEMODE_CREATIVE;
+    int cw = creative ? 0 : inv->craft_w;
 
     float cell = 46 * g->ui.scale;
     float pw = cell * 9 + 48 * g->ui.scale;
-    float grid_h = cell * cw;
+    float grid_h = creative ? cell * 3 + 96.0f * g->ui.scale : cell * cw;
     float ph = grid_h + cell * 5 + 96 * g->ui.scale;
     Rectangle panel = { (sw - pw) / 2, (sh - ph) / 2, pw, ph };
     wl_ui_panel(&g->ui, panel);
 
     /* title */
     Font tf = wl_ui_title_font(&g->ui);
-    const char *title = (g->overlay == WL_OVERLAY_CRAFTING) ? "Crafting" : "Inventory";
+    const char *title = creative ? "Creative"
+                     : (g->overlay == WL_OVERLAY_CRAFTING) ? "Crafting" : "Inventory";
     float fs = 16 * g->ui.scale;
     DrawTextEx(tf, title, (Vector2){ panel.x + 20, panel.y + 14 }, fs, 2.0f,
                (Color){ 235, 235, 225, 255 });
 
-    /* crafting grid -> arrow -> result */
     float gx = panel.x + 24 * g->ui.scale;
     float gy = panel.y + 56 * g->ui.scale;
-    Rectangle craft_area = { gx, gy, cell * cw, cell * cw };
-    draw_grid(g, craft_area, SLOT_CRAFT, cw * cw, cw, 0);
 
-    const WlRecipe *recipe = wl_crafting_match(inv->craft, cw);
-    Rectangle result_area = { gx + cell * cw + 28 * g->ui.scale,
-                              gy + (cell * cw) / 2 - cell / 2, cell, cell };
+    if (creative) {
+        /* catalogue replaces the crafting area; the player inventory
+         * below stays interactive for arranging what you take */
+        Rectangle cat_area = { gx, gy, cell * 9, cell * 3 + 60.0f * g->ui.scale };
+        draw_catalogue(g, cat_area);
+    }
+
+    /* crafting grid -> arrow -> result */
+    Rectangle craft_area = { gx, gy, cell * cw, cell * cw };
+    if (!creative)
+        draw_grid(g, craft_area, SLOT_CRAFT, cw * cw, cw, 0);
+
+    const WlRecipe *recipe = creative ? NULL : wl_crafting_match(inv->craft, cw);
+    Rectangle result_area = creative
+        ? (Rectangle){ 0, 0, 0, 0 }
+        : (Rectangle){ gx + cell * cw + 28 * g->ui.scale,
+                       gy + (cell * cw) / 2 - cell / 2, cell, cell };
     Font arrowf = wl_ui_font(&g->ui);
     DrawTextEx(arrowf, "->", (Vector2){ gx + cell * cw + 4, gy + (cell * cw) / 2 - 14 },
                28 * g->ui.scale, 1.0f, (Color){ 200, 206, 214, 255 });
     if (recipe) {
         WlSlot out = { recipe->out_item, recipe->out_count, 0 };
+        /* (creative never reaches here: recipe is NULL) */
         wl_ui_draw_slot_item(&g->ui, result_area, &out);
         const WlItem *out_item = wl_item_get(recipe->out_item);
         if (out_item && CheckCollisionPointRec(g->ui.mouse, result_area) &&

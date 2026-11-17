@@ -821,6 +821,9 @@ def build_atlas():
     atlas = Image.new("RGBA", (ATLAS_PX, ATLAS_PX), (0, 0, 0, 0))
     for slot, (name, painter) in enumerate(TILE_PAINTERS):
         paint_at(atlas, slot, painter())
+    # fixed white tile (slot 250) for solid-colour box models; see tiles.h
+    white = Image.new("RGBA", (TILE, TILE), (255, 255, 255, 255))
+    atlas.paste(white, ((250 % 16) * TILE, (250 // 16) * TILE))
     out = A / "textures" / "blocks.png"
     atlas.save(out)
     print(f"wrote {out} ({len(TILE_PAINTERS)} tiles)")

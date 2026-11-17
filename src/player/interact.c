@@ -153,7 +153,8 @@ static bool block_intersects_player(const WlPlayer *p, int bx, int by, int bz)
 static bool cell_replaceable(WlWorld *w, int x, int y, int z)
 {
     uint8_t id = wl_world_get_block(w, x, y, z);
-    return id == WL_BLOCK_AIR || id == WL_BLOCK_WATER || id == WL_BLOCK_TALLGRASS;
+    return id == WL_BLOCK_AIR || wl_blocks_liquid(id) ||
+           id == WL_BLOCK_TALLGRASS;
 }
 
 /* ------------------------------------------------------------------ */
@@ -235,6 +236,7 @@ static bool try_place(WlPlayer *p, WlWorld *w, const WlTarget *t,
     }
 
     if (!wl_world_set_block(w, px, py, pz, item->block_id)) return false;
+    p->action_swing = 0.28f;
 
     if (gamemode == WL_WORLD_GAMEMODE_SURVIVAL)
         wl_inv_consume_slot(&p->inv, p->selected_slot);
@@ -279,9 +281,12 @@ int wl_interact_update(WlPlayer *p, WlWorld *w, const WlConfig *cfg,
     const WlItem *food = held;
     if (mouse_right && food && food->food > 0 && p->hunger < 20.0f) {
         p->eat_timer += dt;
+        if (p->action_swing <= 0.0f) p->action_swing = 0.30f; /* chew */
         if (p->eat_timer >= WL_EAT_TIME) {
             p->hunger = p->hunger + (float)food->food > 20.0f ? 20.0f : p->hunger + (float)food->food;
-            wl_inv_consume_slot(&p->inv, p->selected_slot);
+            /* creative keeps the food (no item consumption) */
+            if (wl_world_gamemode(w) == WL_WORLD_GAMEMODE_SURVIVAL)
+                wl_inv_consume_slot(&p->inv, p->selected_slot);
             wl_audio_play(audio, WL_SND_EAT);
             p->eat_timer = 0.0;
         }
@@ -304,6 +309,7 @@ int wl_interact_update(WlPlayer *p, WlWorld *w, const WlConfig *cfg,
                 dmg = 2.0f + (float)held->tool_tier * 0.5f;
             wl_entity_hurt(w, target, dmg, look, audio);
             wl_audio_play_v(audio, WL_SND_SWORD_SWING, 0.14f);
+            p->action_swing = 0.32f;
             if (held && held->durability > 0) damage_tool(p, slot, audio);
             p->break_cooldown = 0.45;
             p->break_progress = 0.0;

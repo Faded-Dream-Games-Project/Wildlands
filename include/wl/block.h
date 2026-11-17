@@ -43,6 +43,25 @@ enum {
     WL_BLOCK_COUNT_BASE
 };
 
+/* Flowing water levels live at FIXED high ids (registered like base
+ * blocks but not mirrored into the item registry) so that mod block
+ * ids -- which start at WL_BLOCK_COUNT_BASE -- never shift. Level 7
+ * (strongest) is id 246 down to level 1 (last spread step) at 240. */
+#define WL_BLOCK_WATER_FLOW_FIRST 240
+static inline uint8_t wl_water_flow_id(int level)
+{
+    return (uint8_t)(WL_BLOCK_WATER_FLOW_FIRST - 1 + level); /* 1..7 */
+}
+static inline int wl_water_flow_level(uint8_t id)
+{
+    return (id >= WL_BLOCK_WATER_FLOW_FIRST && id < WL_BLOCK_WATER_FLOW_FIRST + 7)
+               ? (int)id - (WL_BLOCK_WATER_FLOW_FIRST - 1)
+               : 0;
+}
+
+/* true for source and flowing water alike */
+bool wl_blocks_liquid(uint8_t id);
+
 typedef enum {
     WL_RENDER_SOLID = 0, /* full cube */
     WL_RENDER_CROSS,     /* X-shaped plant sprite */

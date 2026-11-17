@@ -44,6 +44,22 @@ typedef struct WlRenderer {
     Mesh item_mesh[WL_ITEM_MAX];
     bool item_mesh_ok[WL_ITEM_MAX];
 
+    /* first-person held-item animation state (updated every frame from
+     * player movement/actions, never from raw mouse delta) */
+    struct {
+        float yaw_kick;    /* damped lag when the camera turns */
+        float pitch_kick;
+        float last_yaw, last_pitch;
+        bool has_last;
+        float swing;       /* 1 -> 0 swing timer */
+        bool mining;       /* mining retriggers the swing loop */
+        float land;        /* 1 -> 0 landing dip */
+        bool mining_prev_ground;
+        float equip;       /* 1 -> 0 equip dip on slot switch */
+        WlItemId last_item;
+        float idle_t;
+    } held;
+
     /* entities: mob part meshes (unit cubes, one per entity-atlas tile)
      * and the entity/item materials (entity shader + local light) */
     Mesh ent_part_mesh[32];

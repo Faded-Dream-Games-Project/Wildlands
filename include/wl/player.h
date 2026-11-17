@@ -23,6 +23,7 @@ typedef struct WlPlayer {
 
     float eye_height;    /* eased current */
     float bob_phase;
+    float action_swing;   /* > 0: one-shot held-item swing (attack/place/eat) */
     float bob_amount;
 
     /* survival */

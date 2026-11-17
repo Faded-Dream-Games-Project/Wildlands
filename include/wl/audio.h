@@ -12,6 +12,8 @@ typedef struct WlAudio {
     float vol_master, vol_music, vol_sfx, vol_ambient;
     int current_track;   /* WlMusId or -1 */
     double track_fade;   /* seconds of current track played (for switching) */
+    uint32_t play_count;   /* successful PlaySound calls (diagnostics) */
+    uint32_t play_reject;  /* plays skipped: not loaded or cooldown */
 } WlAudio;
 
 /* Initializes the audio device. On failure every call becomes a no-op and

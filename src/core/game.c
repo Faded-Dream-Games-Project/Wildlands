@@ -72,6 +72,8 @@ static void parse_args(WlGame *g, int argc, char **argv)
             g->demo_yaw = (float)atof(argv[++i]) * 0.017453293f;
         } else if (wl_str_eq(argv[i], "--itemgallery")) {
             g->demo_itemgallery = true;
+        } else if (wl_str_eq(argv[i], "--zoo")) {
+            g->demo_zoo = true;
         } else if (wl_str_eq(argv[i], "--time") && i + 1 < argc) {
             g->demo_time = atoi(argv[++i]);
         } else if (wl_str_eq(argv[i], "--pitch") && i + 1 < argc) {
@@ -822,10 +824,16 @@ static void run_selftest(WlGame *g)
                                                          pz + 2.0f });
         selftest_check(g, "cow spawns", cow && cow->active);
         wl_entity_hurt(w, cow, 100.0f, (Vector3){ 1, 0, 0 }, &g->audio);
-        selftest_check(g, "cow dies when hurt enough", !cow->active);
+        /* death is a short fall-over animation, then deactivation */
+        selftest_check(g, "cow enters death animation when killed",
+                       cow->active && cow->death_timer > 0.0f);
         int drops_after = 0;
         wl_world_drops(w, &drops_after);
         selftest_check(g, "cow drops loot", drops_after > drops_before);
+        for (int i = 0; i < 30; i++)
+            wl_world_update_entities(w, p, &g->cfg, &g->audio, 0.05f);
+        selftest_check(g, "cow deactivates after the death animation",
+                       !cow->active);
         (void)before_ents;
 
         /* arrow damages the player through the real projectile path */
@@ -865,6 +873,38 @@ static void run_selftest(WlGame *g)
                            wl_world_get_block(w, fx, fy, fz) ==
                                WL_BLOCK_FURNACE);
         }
+        /* 6c. water: a source flows into a space opened beside it and
+         * dries again when dammed off (real game loop path) */
+        {
+            int wx = px + 3, wy = py + 4, wz = pz + 3;
+            /* small basin: floor + walls, water source in one corner */
+            for (int x = 0; x <= 3; x++)
+                for (int z = 0; z <= 3; z++) {
+                    wl_world_set_block(w, wx + x, wy, wz + z, WL_BLOCK_STONE);
+                    if (x == 0 || x == 3 || z == 0 || z == 3)
+                        for (int y = wy + 1; y <= wy + 2; y++)
+                            wl_world_set_block(w, wx + x, y, wz + z,
+                                               WL_BLOCK_STONE);
+                }
+            wl_world_set_block(w, wx + 1, wy + 1, wz + 1, WL_BLOCK_WATER);
+            for (int i = 0; i < 40; i++) wl_world_water_tick(w, 0.3f);
+            selftest_check(g, "water source spreads in the basin",
+                           wl_blocks_liquid(
+                               wl_world_get_block(w, wx + 2, wy + 1, wz + 1)));
+            /* break the divider: water pours through the gap */
+            wl_world_set_block(w, wx + 2, wy + 1, wz + 2, WL_BLOCK_AIR);
+            for (int i = 0; i < 40; i++) wl_world_water_tick(w, 0.3f);
+            selftest_check(g, "water flows through an opened gap",
+                           wl_blocks_liquid(
+                               wl_world_get_block(w, wx + 2, wy + 1, wz + 2)));
+            /* remove the source: everything dries */
+            wl_world_set_block(w, wx + 1, wy + 1, wz + 1, WL_BLOCK_AIR);
+            for (int i = 0; i < 40; i++) wl_world_water_tick(w, 0.3f);
+            selftest_check(g, "basin dries after source removal",
+                           !wl_blocks_liquid(
+                               wl_world_get_block(w, wx + 2, wy + 1, wz + 1)));
+        }
+
         /* cooked-meat recipe lookup */
         selftest_check(g, "raw beef smelts to steak",
                        wl_furnace_smelt_result(WL_ITEM_BEEF_RAW) ==
@@ -1409,6 +1449,37 @@ static void loading_frame(WlGame *g)
         if (g->player.pos.y < (float)py) g->player.pos.y = (float)py + 0.01f;
 
         g->state = WL_STATE_PLAYING;
+        if (g->demo_zoo) {
+            /* test automation: one of each animal in a fixed ring,
+             * placed on the generated surface; the cow sits straight
+             * ahead as a deterministic attack target */
+            g->demo_zoo = false; /* once */
+            float zx = g->player.pos.x, zz = g->player.pos.z;
+            struct { WlEntityType t; float dx, dz; } ring[] = {
+                { WL_ENT_COW, 0.0f, 5.0f },
+                { WL_ENT_PIG, -4.0f, 3.0f },
+                { WL_ENT_SHEEP, 4.0f, 3.0f },
+                { WL_ENT_CHICKEN, 1.5f, 6.0f },
+                { WL_ENT_SPIDER, -7.0f, 4.0f },
+            };
+            for (size_t i = 0; i < sizeof(ring) / sizeof(ring[0]); i++) {
+                int ex = (int)(zx + ring[i].dx), ez = (int)(zz + ring[i].dz);
+                int top = wl_world_top_at(g->world, ex, ez);
+                if (top <= 0) continue;
+                /* skip water columns: entities spawned over water sink */
+                if (wl_blocks_liquid(wl_world_get_block(g->world, ex, top, ez)))
+                    continue;
+                WlEntity *ze = wl_world_spawn_entity(g->world, ring[i].t,
+                                      (Vector3){ zx + ring[i].dx,
+                                                 (float)top + 1.2f,
+                                                 zz + ring[i].dz });
+                WL_LOGD("zoo: type %d at %.1f,%.1f,%.1f (top=%d)",
+                        (int)ring[i].t, zx + ring[i].dx, (float)top + 1.2f,
+                        zz + ring[i].dz, top);
+                (void)ze;
+            }
+            WL_LOGI("zoo spawned around the player");
+        }
         if (g->demo_time >= 0 && g->state == WL_STATE_PLAYING) {
             /* test automation: jump to a time of day (13300 = night) */
             wl_world_set_time(g->world, (uint32_t)g->demo_time);
@@ -1638,6 +1709,7 @@ static void play_frame(WlGame *g)
         }
         wl_world_advance_time(g->world, dt);
         wl_world_update(g->world, p->pos.x, p->pos.z);
+        wl_world_water_tick(g->world, dt);
         wl_world_update_drops(g->world, p, dt);
         if (wl_world_consume_pickups(g->world) > 0)
             wl_audio_play_v(&g->audio, WL_SND_PICKUP, 0.18f);
@@ -1709,8 +1781,18 @@ static void play_frame(WlGame *g)
         static int diag = 0;
         if (diag++ % 30 == 0) {
             Vector2 dbg_md = GetMouseDelta();
-            WL_LOGD("demo mouse: delta %.1f,%.1f cursor_hidden=%d overlay=%d",
-                    dbg_md.x, dbg_md.y, (int)IsCursorHidden(), (int)g->overlay);
+            WL_LOGD("demo mouse: delta %.1f,%.1f cursor_hidden=%d overlay=%d "
+                    "sfx played=%u rejected=%u",
+                    dbg_md.x, dbg_md.y, (int)IsCursorHidden(), (int)g->overlay,
+                    g->audio.play_count, g->audio.play_reject);
+            {
+                int en = 0;
+                const WlEntity *ee = wl_world_entities(g->world, &en);
+                int alive = 0;
+                for (int q = 0; q < en; q++)
+                    if (ee && ee[q].active) alive++;
+                WL_LOGD("demo ents: total=%d alive=%d", en, alive);
+            }
             WlWorldStats st = wl_world_stats(g->world);
             WL_LOGD("demo pos %.1f,%.1f,%.1f yaw %.2f pitch %.2f drawn %d tris %ld pending %d | "
                     "%.0f fps, %.2f ms avg, worst %.1f ms, rss %d MiB | "
@@ -1760,11 +1842,20 @@ void wl_game_run_frame(WlGame *g)
         g->audio_pending = false;
         double ta = stage_mark();
         wl_audio_init(&g->audio, g->assets);
+        if (g->audio.enabled) {
+            /* sounds were loaded during startup, BEFORE the device
+             * existed (deferred init): every LoadSound came back empty.
+             * Reload them now that the device is up, or the game stays
+             * completely silent forever. */
+            wl_assets_reload_audio(g->assets);
+        }
         wl_audio_set_volumes(&g->audio, g->cfg.vol_master, g->cfg.vol_music,
                              g->cfg.vol_sfx, g->cfg.vol_ambient);
-        WL_LOGI("startup: audio device %s (%.1f ms)",
+        WL_LOGI("startup: audio device %s (%.1f ms); volumes "
+                "master %.2f music %.2f sfx %.2f ambient %.2f",
                 g->audio.enabled ? "ready" : "unavailable, running silent",
-                stage_mark() - ta);
+                stage_mark() - ta, g->cfg.vol_master, g->cfg.vol_music,
+                g->cfg.vol_sfx, g->cfg.vol_ambient);
     }
 
     wl_ui_begin(&g->ui, g->assets, &g->cfg);

@@ -1,5 +1,7 @@
 /* unit_tests.c — deterministic tests for the engine's core systems.
  * Run with: make test */
+#define _POSIX_C_SOURCE 200809L
+#include <time.h>
 #include "wl/wl_common.h"
 #include "wl/util.h"
 #include "wl/noise.h"
@@ -644,6 +646,143 @@ static void test_drops_and_partial_add(void)
     wl_delete_tree(dir);
 }
 
+
+/* ------------------------------------------------------------------ */
+/* water propagation                                                    */
+/* ------------------------------------------------------------------ */
+
+/* stream chunks around a position and wait for the generator */
+static void gen_around(WlWorld *w, int x, int z)
+{
+    for (int i = 0; i < 4000; i++) {
+        wl_world_update_ex(w, x, z, 3, 0); /* no meshing: windowless test */
+        if (wl_world_pending(w, x, z) == 0) return;
+        struct timespec ts = { 0, 2000000 }; /* 2 ms */
+        nanosleep(&ts, NULL);
+    }
+}
+
+static void water_settle(WlWorld *w)
+{
+    for (int i = 0; i < 200; i++) {
+        wl_world_water_tick(w, 0.3f);
+        if (wl_world_water_pending(w) == 0) return;
+    }
+}
+
+static void test_water(void)
+{
+    const char *dir = "tests/.tmp-water";
+    wl_delete_tree(dir);
+    CHECK(wl_mkdir_p(dir));
+    WlWorldParams params;
+    memset(&params, 0, sizeof(params));
+    wl_scpy(params.name, "WaterTest", sizeof(params.name));
+    params.seed = 7;
+    params.type = WL_WORLDTYPE_STANDARD;
+    params.gamemode = WL_WORLD_GAMEMODE_SURVIVAL;
+    WlWorld *w = wl_world_create(&params, dir);
+    CHECK(w != NULL);
+    if (!w) { wl_delete_tree(dir); return; }
+
+    gen_around(w, 0, 0);
+    const int Y = 100;
+
+    /* sealed test basin: a 7x7 stone slab at Y with walls up to Y+2
+     * (a source spreads 7 cells, so the rim must contain the Y+1 level
+     * too or level-4 flows escape and flood the terrain below), plus a
+     * closed box underneath so the pour-down test cannot run away into
+     * the world's cave system and starve the update queue */
+    for (int x = -3; x <= 3; x++)
+        for (int z = -3; z <= 3; z++) {
+            for (int y = Y - 7; y <= Y; y++) {
+                bool shell = (x == -3 || x == 3 || z == -3 || z == 3 ||
+                              y == Y - 7 || y == Y);
+                /* the platform level keeps a hole at the centre for the
+                 * pour test; fill it later */
+                if (x == 0 && z == 0 && y == Y) continue;
+                if (shell) CHECK(wl_world_set_block(w, x, y, z, WL_BLOCK_STONE));
+            }
+            /* rim walls above the platform level */
+            if (x == -3 || x == 3 || z == -3 || z == 3)
+                for (int y = Y + 1; y <= Y + 2; y++)
+                    CHECK(wl_world_set_block(w, x, y, z, WL_BLOCK_STONE));
+        }
+
+    /* 1) source spreads sideways over the platform */
+    CHECK(wl_world_set_block(w, 0, Y + 1, 0, WL_BLOCK_WATER));
+    water_settle(w);
+    CHECK(wl_world_get_block(w, 1, Y + 1, 0) == wl_water_flow_id(7));
+    CHECK(wl_world_get_block(w, -1, Y + 1, 0) == wl_water_flow_id(7));
+    CHECK(wl_world_get_block(w, 0, Y + 1, 1) == wl_water_flow_id(7));
+    /* level decreases away from the source */
+    CHECK(wl_world_get_block(w, 2, Y + 1, 0) == wl_water_flow_id(6));
+    /* solid floor: nothing poured through */
+    CHECK(wl_world_get_block(w, 1, Y, 0) == WL_BLOCK_STONE);
+
+    /* 2) breaking the floor block lets the column pour into the box */
+    CHECK(wl_world_set_block(w, 0, Y, 0, WL_BLOCK_AIR));
+    water_settle(w);
+    CHECK(wl_blocks_liquid(wl_world_get_block(w, 0, Y - 1, 0)));
+    CHECK(wl_blocks_liquid(wl_world_get_block(w, 0, Y - 6, 0)));
+    /* the box floor stops the column and the water spreads inside */
+    CHECK(wl_blocks_liquid(wl_world_get_block(w, 1, Y - 6, 0)));
+
+    /* 3) source removal dries every dependent flow */
+    CHECK(wl_world_set_block(w, 0, Y + 1, 0, WL_BLOCK_AIR));
+    water_settle(w);
+    CHECK(wl_world_get_block(w, 1, Y + 1, 0) == WL_BLOCK_AIR);
+    CHECK(wl_world_get_block(w, 2, Y + 1, 0) == WL_BLOCK_AIR);
+    CHECK(wl_world_get_block(w, 0, Y + 1, 1) == WL_BLOCK_AIR);
+
+    /* 4) a full dam row cuts the supply: everything behind dries */
+    CHECK(wl_world_set_block(w, 0, Y + 1, 0, WL_BLOCK_WATER));
+    water_settle(w);
+    CHECK(wl_world_get_block(w, 1, Y + 1, 0) == wl_water_flow_id(7));
+    for (int z = -2; z <= 2; z++)
+        CHECK(wl_world_set_block(w, 1, Y + 1, z, WL_BLOCK_COBBLE));
+    water_settle(w);
+    CHECK(wl_world_get_block(w, 2, Y + 1, 0) == WL_BLOCK_AIR);
+    CHECK(wl_world_get_block(w, 1, Y + 1, 0) == WL_BLOCK_COBBLE);
+
+    /* 5) propagation crosses chunk boundaries (x=15|16 seam): a walled
+     * trough so the water cannot spill off and flood the terrain */
+    gen_around(w, 16, 0);
+    for (int x = 13; x <= 18; x++)
+        for (int z = 0; z <= 2; z++) {
+            CHECK(wl_world_set_block(w, x, Y, z, WL_BLOCK_STONE));
+            if (x == 13 || x == 18 || z == 0 || z == 2)
+                for (int y = Y + 1; y <= Y + 2; y++)
+                    CHECK(wl_world_set_block(w, x, y, z, WL_BLOCK_STONE));
+        }
+    CHECK(wl_world_set_block(w, 14, Y + 1, 1, WL_BLOCK_WATER));
+    water_settle(w);
+    CHECK(wl_world_get_block(w, 15, Y + 1, 1) == wl_water_flow_id(7));
+    CHECK(wl_world_get_block(w, 16, Y + 1, 1) == wl_water_flow_id(6)); /* next chunk */
+    CHECK(wl_world_get_block(w, 17, Y + 1, 1) == wl_water_flow_id(5));
+
+    /* 6) the queue fully drains and nothing was ever dropped */
+    water_settle(w);
+    CHECK(wl_world_water_pending(w) == 0);
+    CHECK(wl_world_water_dropped(w) == 0);
+
+    /* 7) flowing water persists through save + reload */
+    CHECK(wl_world_save_modified(w));
+    uint8_t before = wl_world_get_block(w, 16, Y + 1, 1); /* seam flow */
+    CHECK(wl_water_flow_level(before) == 6);
+    wl_world_destroy(w);
+    w = wl_world_create(&params, dir);
+    CHECK(w != NULL);
+    if (w) {
+        gen_around(w, 16, 0);
+        CHECK(wl_world_get_block(w, 16, Y + 1, 1) == before);
+        /* the reloaded flow is dormant until a neighbour changes (same
+         * rule as source blocks) */
+        wl_world_destroy(w);
+    }
+    wl_delete_tree(dir);
+}
+
 int main(void)
 {
     test_util();
@@ -663,6 +802,7 @@ int main(void)
     test_textfield_edit();
     test_input_seams();
     test_drops_and_partial_add();
+    test_water();
 
     printf("unit tests: %d run, %d failed\r\n", tests_run, tests_failed);
     return tests_failed ? 1 : 0;

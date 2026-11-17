@@ -102,7 +102,10 @@ enum WlTile {
     TILE_CRACK_7,
     TILE_CRACK_8,
     TILE_CRACK_9,
-    TILE_BASE_COUNT
+    TILE_BASE_COUNT,
+    /* fixed high slot used to tint solid-colour box models (held
+     * tools): far above every base and mod-registered tile */
+    TILE_SOLID_WHITE = 250
 };
 
 #endif /* WL_TILES_H */

@@ -84,6 +84,44 @@ static Texture2D load_texture_rel(WlAssets *a, const char *rel, bool *ok)
 /* create / destroy                                                    */
 /* ------------------------------------------------------------------ */
 
+
+
+static const char *snd_files[WL_SND_COUNT] = {
+"audio/click.wav", "audio/place.wav", "audio/break_stone.wav",
+"audio/break_dirt.wav", "audio/break_wood.wav", "audio/step_grass.wav",
+"audio/step_stone.wav", "audio/hurt.wav", "audio/eat.wav",
+"audio/splash.wav",
+"audio/mob_hurt.wav",
+"audio/bow.wav",
+"audio/pickup.wav",
+"audio/throw.wav",
+"audio/step_dirt.wav",
+"audio/step_wood.wav",
+"audio/step_sand.wav",
+"audio/step_snow.wav",
+"audio/jump.wav",
+"audio/land.wav",
+"audio/death.wav",
+"audio/sword_swing.wav",
+"audio/arrow_hit.wav",
+"audio/furnace_ignite.wav",
+"audio/furnace_done.wav",
+"audio/zombie_ambient.wav",
+"audio/skeleton_ambient.wav",
+"audio/spider_ambient.wav",
+"audio/cow_voice.wav",
+"audio/pig_voice.wav",
+"audio/chicken_voice.wav",
+"audio/sheep_voice.wav",
+"audio/amb_day.wav",
+"audio/amb_night.wav",
+"audio/amb_cave.wav",
+};
+
+static const char *mus_files[WL_MUS_COUNT] = {
+"music/menu.wav", "music/day.wav", "music/night.wav",
+};
+
 WlAssets *wl_assets_create(const char *root)
 {
     WlAssets *a = calloc(1, sizeof(WlAssets));
@@ -192,37 +230,7 @@ WlAssets *wl_assets_create(const char *root)
         a->entity_locs.fog_range = GetShaderLocation(s, "fogRange");
     }
 
-    static const char *snd_files[WL_SND_COUNT] = {
-        "audio/click.wav", "audio/place.wav", "audio/break_stone.wav",
-        "audio/break_dirt.wav", "audio/break_wood.wav", "audio/step_grass.wav",
-        "audio/step_stone.wav", "audio/hurt.wav", "audio/eat.wav",
-        "audio/splash.wav",
-        "audio/mob_hurt.wav",
-        "audio/bow.wav",
-        "audio/pickup.wav",
-        "audio/throw.wav",
-        "audio/step_dirt.wav",
-        "audio/step_wood.wav",
-        "audio/step_sand.wav",
-        "audio/step_snow.wav",
-        "audio/jump.wav",
-        "audio/land.wav",
-        "audio/death.wav",
-        "audio/sword_swing.wav",
-        "audio/arrow_hit.wav",
-        "audio/furnace_ignite.wav",
-        "audio/furnace_done.wav",
-        "audio/zombie_ambient.wav",
-        "audio/skeleton_ambient.wav",
-        "audio/spider_ambient.wav",
-        "audio/cow_voice.wav",
-        "audio/pig_voice.wav",
-        "audio/chicken_voice.wav",
-        "audio/sheep_voice.wav",
-        "audio/amb_day.wav",
-        "audio/amb_night.wav",
-        "audio/amb_cave.wav",
-    };
+    int snd_loaded = 0;
     for (int i = 0; i < (int)WL_SND_COUNT; i++) {
         char path[WL_PATH_MAX];
         if (!build_path(path, sizeof(path), a, snd_files[i])) continue;
@@ -230,25 +238,64 @@ WlAssets *wl_assets_create(const char *root)
         a->snds_ok[i] = (a->snds[i].frameCount > 0);
         if (!a->snds_ok[i]) {
             if (FileExists(path))
-                WL_LOGW("sound failed to load (no audio device?): %s", path);
+                WL_LOGD("sound not loaded yet (audio device not up): %s", path);
             else
                 WL_LOGW("missing sound file: %s (silent)", path);
+        } else {
+            snd_loaded++;
         }
     }
+    WL_LOGI("audio assets: %d/%d sounds loaded at startup",
+            snd_loaded, (int)WL_SND_COUNT);
 
-    static const char *mus_files[WL_MUS_COUNT] = {
-        "music/menu.wav", "music/day.wav", "music/night.wav",
-    };
     for (int i = 0; i < (int)WL_MUS_COUNT; i++) {
         char path[WL_PATH_MAX];
         if (!build_path(path, sizeof(path), a, mus_files[i])) continue;
         a->music[i] = LoadMusicStream(path);
         a->music_ok[i] = (a->music[i].frameCount > 0);
-        if (!a->music_ok[i]) WL_LOGW("missing music: %s (silent)", path);
+        if (!a->music_ok[i]) {
+            if (FileExists(path))
+                WL_LOGD("music not loaded yet (audio device not up): %s", path);
+            else
+                WL_LOGW("missing music file: %s (silent)", path);
+        }
     }
 
     WL_LOGI("asset manager ready (root %s)", a->root);
     return a;
+}
+
+/* Re-loads every sound and music stream that failed to load because the
+ * audio device did not exist yet (sounds are loaded during startup,
+ * while InitAudioDevice is deferred to the first frame). Call once the
+ * device is up; existing loaded assets are left untouched. Returns the
+ * number of sounds now loaded. */
+int wl_assets_reload_audio(WlAssets *a)
+{
+    if (!a) return 0;
+    int loaded = 0;
+    for (int i = 0; i < (int)WL_SND_COUNT; i++) {
+        char path[WL_PATH_MAX];
+        if (!build_path(path, sizeof(path), a, snd_files[i])) continue;
+        if (!a->snds_ok[i]) {
+            a->snds[i] = LoadSound(path);
+            a->snds_ok[i] = (a->snds[i].frameCount > 0);
+            if (!a->snds_ok[i] && FileExists(path))
+                WL_LOGW("sound reload failed: %s", path);
+        }
+        loaded += a->snds_ok[i] ? 1 : 0;
+    }
+    for (int i = 0; i < (int)WL_MUS_COUNT; i++) {
+        char path[WL_PATH_MAX];
+        if (!build_path(path, sizeof(path), a, mus_files[i])) continue;
+        if (!a->music_ok[i]) {
+            a->music[i] = LoadMusicStream(path);
+            a->music_ok[i] = (a->music[i].frameCount > 0);
+        }
+    }
+    WL_LOGI("audio assets after device init: %d/%d sounds loaded",
+            loaded, (int)WL_SND_COUNT);
+    return loaded;
 }
 
 void wl_assets_destroy(WlAssets *a)

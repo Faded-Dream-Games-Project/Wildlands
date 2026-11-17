@@ -11,6 +11,8 @@
 #include "wl/config.h"
 #include "wl/audio.h"
 #include "wl/assets.h"
+
+#define WL_DEATH_TIME 0.9f /* seconds of fall-over death animation */
 #include "wl/block.h"
 #include "wl/item.h"
 #include "wl/worldgen.h"
@@ -200,9 +202,9 @@ void wl_entity_hurt(WlWorld *w, WlEntity *e, float amount, Vector3 knock_dir,
     /* animals panic */
     if (!wl_entity_type_hostile(e->type)) e->wander_timer = -6.0f; /* flee mode */
     wl_audio_play_v(audio, WL_SND_MOB_HURT, 0.15f);
-    if (e->health <= 0.0f) {
+    if (e->health <= 0.0f && e->death_timer <= 0.0f) {
         drop_loot(w, e);
-        e->active = false;
+        e->death_timer = WL_DEATH_TIME; /* fall-over animation */
     }
 }
 
@@ -525,6 +527,14 @@ void wl_world_update_entities(WlWorld *w, struct WlPlayer *p,
     for (int t = 0; t < WL_ENT_TYPE_COUNT; t++)
         if (s_voice_cooldown[t] > 0.0f) s_voice_cooldown[t] -= dt;
 
+    /* pass 1: dying entities count down and vanish; nothing else runs */
+    for (int i = 0; i < count; i++) {
+        WlEntity *e = &ents[i];
+        if (!e->active || e->death_timer <= 0.0f) continue;
+        e->death_timer -= dt;
+        if (e->death_timer <= 0.0f) e->active = false;
+    }
+
     static float spawn_acc = 0.0f;
     spawn_acc += dt * s_spawn_rate;
     while (spawn_acc >= 1.0f) {
@@ -535,6 +545,7 @@ void wl_world_update_entities(WlWorld *w, struct WlPlayer *p,
     for (int i = 0; i < count; i++) {
         WlEntity *e = &ents[i];
         if (!e->active) continue;
+        if (e->death_timer > 0.0f) continue; /* dying: no AI, no physics */
         e->age += dt;
         e->live_ticks += dt;
         if (e->attack_cd > 0.0f) e->attack_cd -= dt;

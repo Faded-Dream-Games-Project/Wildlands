@@ -212,6 +212,8 @@ void wl_renderer_init(WlRenderer *r, WlAssets *assets)
     r->ent_maps[MATERIAL_MAP_DIFFUSE].texture =
         wl_assets_tex(assets, WL_TEX_ENTITIES);
     r->ent_maps[MATERIAL_MAP_DIFFUSE].color = WHITE;
+    WL_LOGI("renderer: entity atlas texture id=%u",
+            r->ent_maps[MATERIAL_MAP_DIFFUSE].texture.id);
 
     r->mat_item = r->mat_ent;
     r->mat_item.maps = r->item_maps;
@@ -490,6 +492,176 @@ void wl_renderer_draw_world(WlRenderer *r, WlWorld *w, const struct WlConfig *cf
 
 /* quad facing +axis: emits two triangles wound front-facing (raylib 6.2
  * enables backface culling and the render batch never disables it) */
+/* White atlas tile used to tint solid-colour box models (see
+ * tools/gen_assets.py; far above every base or mod tile). */
+#define WL_TILE_SOLID_WHITE 250
+
+/* axis-aligned coloured box for held tool models: rgbi colour, per-face
+ * shading like the block cubes so the shape reads as 3D. */
+static void solid_box(float *pos, float *uv, unsigned char *col,
+                      unsigned short *idx, int *vc, int *ic,
+                      float cx, float cy, float cz,
+                      float hx, float hy, float hz,
+                      unsigned char r, unsigned char g, unsigned char b)
+{
+    /* corners in item_face winding order per face */
+    const float x0 = cx - hx, x1 = cx + hx;
+    const float y0 = cy - hy, y1 = cy + hy;
+    const float z0 = cz - hz, z1 = cz + hz;
+    const float faces[6][4][3] = {
+        { {x1,y0,z0}, {x1,y1,z0}, {x1,y1,z1}, {x1,y0,z1} }, /* +X */
+        { {x0,y0,z1}, {x0,y1,z1}, {x0,y1,z0}, {x0,y0,z0} }, /* -X */
+        { {x0,y1,z1}, {x1,y1,z1}, {x1,y1,z0}, {x0,y1,z0} }, /* +Y */
+        { {x0,y0,z0}, {x1,y0,z0}, {x1,y0,z1}, {x0,y0,z1} }, /* -Y */
+        { {x0,y0,z1}, {x1,y0,z1}, {x1,y1,z1}, {x0,y1,z1} }, /* +Z */
+        { {x1,y0,z0}, {x0,y0,z0}, {x0,y1,z0}, {x1,y1,z0} }, /* -Z */
+    };
+    static const unsigned char shade[6] = { 196, 156, 255, 128, 216, 176 };
+    for (int f = 0; f < 6; f++) {
+        /* UVs sample the single white texel so the vertex colour shows */
+        float u, v0, v1;
+        wl_tile_uv(WL_TILE_SOLID_WHITE, &u, &v0, &v1, &v1);
+        (void)v1;
+        for (int i = 0; i < 4; i++) {
+            pos[3 * (*vc + i) + 0] = faces[f][i][0];
+            pos[3 * (*vc + i) + 1] = faces[f][i][1];
+            pos[3 * (*vc + i) + 2] = faces[f][i][2];
+            uv[2 * (*vc + i) + 0] = u;
+            uv[2 * (*vc + i) + 1] = v0;
+            col[4 * (*vc + i) + 0] = (unsigned char)(r * shade[f] / 255);
+            col[4 * (*vc + i) + 1] = (unsigned char)(g * shade[f] / 255);
+            col[4 * (*vc + i) + 2] = (unsigned char)(b * shade[f] / 255);
+            col[4 * (*vc + i) + 3] = 255;
+        }
+        idx[(*ic)++] = (unsigned short)(*vc + 0);
+        idx[(*ic)++] = (unsigned short)(*vc + 1);
+        idx[(*ic)++] = (unsigned short)(*vc + 2);
+        idx[(*ic)++] = (unsigned short)(*vc + 0);
+        idx[(*ic)++] = (unsigned short)(*vc + 2);
+        idx[(*ic)++] = (unsigned short)(*vc + 3);
+        *vc += 4;
+    }
+}
+
+/* Head palette per tool tier (wood / stone / iron / diamond). */
+static void tier_color(int tier, unsigned char *r, unsigned char *g, unsigned char *b)
+{
+    switch (tier) {
+    case 1: *r = 152; *g = 112; *b = 72;  break; /* wood  */
+    case 2: *r = 138; *g = 138; *b = 140; break; /* stone */
+    case 3: *r = 224; *g = 224; *b = 222; break; /* iron  */
+    default: *r = 104; *g = 228; *b = 216; break; /* diamond */
+    }
+}
+
+/* Builds a tool model pointing up (+Y) with the grip at the origin:
+ * handle + head boxes per tool kind. Real layered 3D geometry, lit by
+ * the entity shader, not a flat billboard. */
+static Mesh build_tool_mesh(WlToolKind kind, int tier)
+{
+    Mesh m;
+    memset(&m, 0, sizeof(m));
+    int cap_v = 512, cap_i = 768;
+    float *pos = malloc((size_t)cap_v * 3 * sizeof(float));
+    float *uv = malloc((size_t)cap_v * 2 * sizeof(float));
+    unsigned char *col = malloc((size_t)cap_v * 4);
+    unsigned short *ix = malloc((size_t)cap_i * sizeof(unsigned short));
+    if (!pos || !uv || !col || !ix) {
+        free(pos); free(uv); free(col); free(ix);
+        return m;
+    }
+    int vc = 0, ic = 0;
+
+    unsigned char hr, hg, hb;
+    tier_color(tier, &hr, &hg, &hb);
+    const unsigned char wood[3] = { 150, 111, 70 };
+    const unsigned char dark[3] = { 88, 60, 42 };
+
+    if (kind == WL_TOOL_SWORD) {
+        /* grip (leather), guard, blade, tip */
+        solid_box(pos, uv, col, ix, &vc, &ic, 0, 0.10f, 0, .032f, .11f, .032f,
+                  dark[0], dark[1], dark[2]);
+        solid_box(pos, uv, col, ix, &vc, &ic, 0, 0.225f, 0, .115f, .030f, .05f,
+                  hr, hg, hb);
+        solid_box(pos, uv, col, ix, &vc, &ic, 0, 0.47f, 0, .052f, .23f, .024f,
+                  hr, hg, hb);
+        solid_box(pos, uv, col, ix, &vc, &ic, 0, 0.725f, 0, .026f, .035f, .016f,
+                  hr, hg, hb);
+    } else if (kind == WL_TOOL_PICKAXE) {
+        solid_box(pos, uv, col, ix, &vc, &ic, 0, 0.28f, 0, .036f, .30f, .036f,
+                  wood[0], wood[1], wood[2]);
+        solid_box(pos, uv, col, ix, &vc, &ic, 0, 0.60f, 0, .13f, .05f, .05f,
+                  hr, hg, hb);
+        /* stepped prongs approximate the curved pick */
+        solid_box(pos, uv, col, ix, &vc, &ic,  0.155f, 0.565f, 0, .055f, .045f, .045f, hr, hg, hb);
+        solid_box(pos, uv, col, ix, &vc, &ic, -0.155f, 0.565f, 0, .055f, .045f, .045f, hr, hg, hb);
+        solid_box(pos, uv, col, ix, &vc, &ic,  0.215f, 0.515f, 0, .05f, .04f, .04f, hr, hg, hb);
+        solid_box(pos, uv, col, ix, &vc, &ic, -0.215f, 0.515f, 0, .05f, .04f, .04f, hr, hg, hb);
+        solid_box(pos, uv, col, ix, &vc, &ic,  0.255f, 0.462f, 0, .028f, .035f, .032f, hr, hg, hb);
+        solid_box(pos, uv, col, ix, &vc, &ic, -0.255f, 0.462f, 0, .028f, .035f, .032f, hr, hg, hb);
+    } else if (kind == WL_TOOL_AXE) {
+        solid_box(pos, uv, col, ix, &vc, &ic, 0, 0.27f, 0, .036f, .29f, .036f,
+                  wood[0], wood[1], wood[2]);
+        /* head block + blade on one side */
+        solid_box(pos, uv, col, ix, &vc, &ic, 0.06f, 0.565f, 0, .085f, .085f, .048f,
+                  hr, hg, hb);
+        solid_box(pos, uv, col, ix, &vc, &ic, 0.155f, 0.555f, 0, .045f, .075f, .030f,
+                  hr, hg, hb);
+        solid_box(pos, uv, col, ix, &vc, &ic, 0.20f, 0.545f, 0, .022f, .06f, .022f,
+                  hr, hg, hb);
+    } else { /* WL_TOOL_SHOVEL */
+        solid_box(pos, uv, col, ix, &vc, &ic, 0, 0.27f, 0, .036f, .29f, .036f,
+                  wood[0], wood[1], wood[2]);
+        solid_box(pos, uv, col, ix, &vc, &ic, 0, 0.575f, 0, .055f, .05f, .055f,
+                  hr, hg, hb);
+        /* spade + tip */
+        solid_box(pos, uv, col, ix, &vc, &ic, 0, 0.71f, 0, .105f, .115f, .026f,
+                  hr, hg, hb);
+        solid_box(pos, uv, col, ix, &vc, &ic, 0, 0.835f, 0, .05f, .022f, .02f,
+                  hr, hg, hb);
+    }
+
+    m.vertexCount = vc;
+    m.triangleCount = ic / 3;
+    m.vertices = pos;
+    m.texcoords = uv;
+    m.colors = col;
+    m.indices = ix;
+    UploadMesh(&m, false);
+    return m;
+}
+
+/* Held torch: wooden stick + glowing tip (lit separately by the
+ * held-item light boost). */
+static Mesh build_torch_mesh(void)
+{
+    Mesh m;
+    memset(&m, 0, sizeof(m));
+    float *pos = malloc(24 * 6 * 3 * sizeof(float));
+    float *uv = malloc(24 * 6 * 2 * sizeof(float));
+    unsigned char *col = malloc(24 * 6 * 4);
+    unsigned short *ix = malloc(36 * 6 * sizeof(unsigned short));
+    if (!pos || !uv || !col || !ix) {
+        free(pos); free(uv); free(col); free(ix);
+        return m;
+    }
+    int vc = 0, ic = 0;
+    solid_box(pos, uv, col, ix, &vc, &ic, 0, 0.20f, 0, .042f, .24f, .042f,
+              150, 111, 70);
+    solid_box(pos, uv, col, ix, &vc, &ic, 0, 0.475f, 0, .058f, .055f, .058f,
+              255, 168, 56);
+    solid_box(pos, uv, col, ix, &vc, &ic, 0, 0.525f, 0, .032f, .028f, .032f,
+              255, 236, 150);
+    m.vertexCount = vc;
+    m.triangleCount = ic / 3;
+    m.vertices = pos;
+    m.texcoords = uv;
+    m.colors = col;
+    m.indices = ix;
+    UploadMesh(&m, false);
+    return m;
+}
+
 static void item_face(float *pos, float *uv, unsigned char *col, unsigned short *idx,
                       int *vc, int *ic,
                       const float p[4][3], int tile, unsigned char shade)
@@ -523,6 +695,17 @@ static const Mesh *item_mesh(WlRenderer *r, WlItemId item)
     if (r->item_mesh_ok[item]) return &r->item_mesh[item];
 
     const WlItem *def = wl_item_get(item);
+    if (def->tool != WL_TOOL_NONE) {
+        /* real 3D tool model (handle + head boxes), not a billboard */
+        r->item_mesh[item] = build_tool_mesh(def->tool, def->tool_tier);
+        r->item_mesh_ok[item] = (r->item_mesh[item].vertexCount > 0);
+        return r->item_mesh_ok[item] ? &r->item_mesh[item] : NULL;
+    }
+    if (def->is_block && def->block_id == WL_BLOCK_TORCH) {
+        r->item_mesh[item] = build_torch_mesh();
+        r->item_mesh_ok[item] = (r->item_mesh[item].vertexCount > 0);
+        return r->item_mesh_ok[item] ? &r->item_mesh[item] : NULL;
+    }
     int tile = -1;
     const WlBlock *blk = NULL;
     if (def->is_block) {
@@ -531,7 +714,7 @@ static const Mesh *item_mesh(WlRenderer *r, WlItemId item)
         if (blk->shape != WL_RENDER_CROSS) tile = -2; /* full cube */
         else tile = blk->tex[0];                      /* cross sprite  */
     } else {
-        /* pure item: its icon tile as a flat sprite */
+        /* pure item: its icon tile as an extruded sprite */
         if (def->tile == 0) return NULL; /* no icon (should not happen) */
         tile = def->tile;
     }
@@ -539,8 +722,9 @@ static const Mesh *item_mesh(WlRenderer *r, WlItemId item)
         /* build */
         Mesh m;
         memset(&m, 0, sizeof(m));
-        int cap_v = (tile == -2) ? 24 : 8;  /* cube: 6 faces; sprite: 2 sides */
-        int cap_i = (tile == -2) ? 36 : 12;
+        /* cube: 6 faces = 24v/36i; extruded sprite: front+back+4 rim
+         * faces = 24v/36i as well */
+        int cap_v = 24, cap_i = 36;
         float *pos = malloc((size_t)cap_v * 3 * sizeof(float));
         float *uv = malloc((size_t)cap_v * 2 * sizeof(float));
         unsigned char *col = malloc((size_t)cap_v * 4);
@@ -565,13 +749,45 @@ static const Mesh *item_mesh(WlRenderer *r, WlItemId item)
             for (int f = 0; f < 6; f++)
                 item_face(pos, uv, col, ix, &vc, &ic, faces[f], blk->tex[f], shade[f]);
         } else {
-            /* flat sprite, both windings so it is visible from two sides */
+            /* extruded sprite: icon on the front/back faces, darkened
+             * rim faces give it depth (no flat billboard) */
             float s = 0.5f;
-            float front[4][3] = { {-s,-s,0}, { s,-s,0}, { s, s,0}, {-s, s,0} };
-            float back[4][3]  = { { s,-s,0}, {-s,-s,0}, {-s, s,0}, { s, s,0} };
+            float d = 0.075f; /* extrusion depth */
             int t = tile >= 0 ? tile : blk->tex[0];
+            float front[4][3] = { {-s,-s, d}, { s,-s, d}, { s, s, d}, {-s, s, d} };
+            float back[4][3]  = { { s,-s,-d}, {-s,-s,-d}, {-s, s,-d}, { s, s,-d} };
             item_face(pos, uv, col, ix, &vc, &ic, front, t, 255);
-            item_face(pos, uv, col, ix, &vc, &ic, back, t, 255);
+            item_face(pos, uv, col, ix, &vc, &ic, back, t, 230);
+            /* rim: same tile sampled at a thin strip, darkened */
+            float u0, v0, u1, v1;
+            wl_tile_uv(t, &u0, &v0, &u1, &v1);
+            float um = (u0 + u1) * 0.5f;
+            float rim[4][4][3] = {
+                { { s,-s,-d}, { s,-s, d}, { s, s, d}, { s, s,-d} }, /* +X */
+                { {-s,-s, d}, {-s,-s,-d}, {-s, s,-d}, {-s, s, d} }, /* -X */
+                { {-s, s, d}, { s, s, d}, { s, s,-d}, {-s, s,-d} }, /* +Y */
+                { {-s,-s,-d}, { s,-s,-d}, { s,-s, d}, {-s,-s, d} }, /* -Y */
+            };
+            for (int f = 0; f < 4; f++) {
+                for (int i = 0; i < 4; i++) {
+                    pos[3 * (vc + i) + 0] = rim[f][i][0];
+                    pos[3 * (vc + i) + 1] = rim[f][i][1];
+                    pos[3 * (vc + i) + 2] = rim[f][i][2];
+                    uv[2 * (vc + i) + 0] = um;
+                    uv[2 * (vc + i) + 1] = (v0 + v1) * 0.5f;
+                    col[4 * (vc + i) + 0] = 90;
+                    col[4 * (vc + i) + 1] = 90;
+                    col[4 * (vc + i) + 2] = 90;
+                    col[4 * (vc + i) + 3] = 255;
+                }
+                ix[ic++] = (unsigned short)(vc + 0);
+                ix[ic++] = (unsigned short)(vc + 1);
+                ix[ic++] = (unsigned short)(vc + 2);
+                ix[ic++] = (unsigned short)(vc + 0);
+                ix[ic++] = (unsigned short)(vc + 2);
+                ix[ic++] = (unsigned short)(vc + 3);
+                vc += 4;
+            }
         }
 
         m.vertexCount = vc;
@@ -623,41 +839,119 @@ void wl_renderer_draw_held_item(WlRenderer *r, struct WlWorld *w, const struct W
     if (slot.item == WL_ITEM_NONE) return; /* empty hand draws nothing */
     const Mesh *m = item_mesh(r, slot.item);
     if (!m) return;
-
-    /* camera-space placement: forward + right + down, tilted like a hand.
-     * Blocks are small cubes; sprite items (tools, food, torch...) are
-     * larger flat icons angled toward the camera, Minecraft-style. */
     const WlItem *def = wl_item_get(slot.item);
-    bool is_sprite = true; /* pure items are flat icons */
-    if (def && def->is_block) {
-        const WlBlock *b = wl_block_get(def->block_id);
-        is_sprite = !(b && b->shape != WL_RENDER_CROSS); /* torches etc. */
-    }
+    if (!def) return;
+
+    float dt = GetFrameTime();
+    if (dt > 0.05f) dt = 0.05f;
+
+    /* ---- animation state: driven by player movement and actions, never
+     * by raw mouse delta. The camera turns freely; the held item only
+     * gets a damped "lag" spring so it feels carried, not bolted on. */
     Vector3 f = Vector3Subtract(r->cam.target, r->cam.position);
     f = Vector3Normalize(f);
     Vector3 up = { 0.0f, 1.0f, 0.0f };
     Vector3 right = Vector3CrossProduct(f, up);
     right = Vector3Normalize(right);
-    Vector3 pos = Vector3Add(r->cam.position, f);
-    pos = Vector3Add(pos, Vector3Scale(right, is_sprite ? 0.34f : 0.46f));
-    pos.y -= is_sprite ? 0.30f : 0.42f;
-
     float cam_yaw = atan2f(f.x, f.z);
-    Matrix tf;
-    if (is_sprite) {
-        /* billboard the icon toward the camera, then grip-tilt it:
-         * leaned back, rotated a quarter-turn around the view axis */
-        tf = MatrixMultiply(MatrixScale(0.55f, 0.55f, 0.55f),
-                            MatrixRotateZ(0.55f));
-        tf = MatrixMultiply(tf, MatrixRotateX(-0.45f));
-        tf = MatrixMultiply(tf, MatrixRotateY(cam_yaw + 0.25f));
-        tf = MatrixMultiply(tf, MatrixTranslate(pos.x, pos.y, pos.z));
-    } else {
-        tf = MatrixMultiply(MatrixScale(0.30f, 0.30f, 0.30f),
-                            MatrixRotateX(-0.32f));
-        tf = MatrixMultiply(tf, MatrixRotateY(cam_yaw + 0.7f));
-        tf = MatrixMultiply(tf, MatrixTranslate(pos.x, pos.y, pos.z));
+    float cam_pitch = asinf(fmaxf(-1.0f, fminf(1.0f, f.y)));
+
+    if (!r->held.has_last) {
+        r->held.last_yaw = cam_yaw;
+        r->held.last_pitch = cam_pitch;
+        r->held.has_last = true;
     }
+    /* wrap the yaw difference to [-pi, pi] */
+    float dyaw = cam_yaw - r->held.last_yaw;
+    while (dyaw > PI) dyaw -= 2.0f * PI;
+    while (dyaw < -PI) dyaw += 2.0f * PI;
+    float dpitch = cam_pitch - r->held.last_pitch;
+    r->held.last_yaw = cam_yaw;
+    r->held.last_pitch = cam_pitch;
+
+    /* spring: kicks opposite the turn, decays fast */
+    r->held.yaw_kick += -dyaw * 0.55f;
+    r->held.pitch_kick += -dpitch * 0.45f;
+    float decay = expf(-9.0f * dt);
+    r->held.yaw_kick = fmaxf(-0.30f, fminf(0.30f, r->held.yaw_kick)) * decay;
+    r->held.pitch_kick = fmaxf(-0.30f, fminf(0.30f, r->held.pitch_kick)) * decay;
+
+    /* swing: one-shot from actions (attack/place/eat), looping while
+     * mining; retriggered, never re-fired mid-swing */
+    bool swinging = p->action_swing > 0.0f || p->break_progress > 0.0f;
+    if (swinging && r->held.swing <= 0.0f) r->held.swing = 1.0f;
+    if (r->held.swing > 0.0f) {
+        r->held.swing -= dt / 0.30f;
+        if (r->held.swing < 0.0f) r->held.swing = 0.0f;
+    }
+
+    /* landing dip: on_ground rising edge */
+    if (p->on_ground && !r->held.mining_prev_ground) r->held.land = 1.0f;
+    r->held.mining_prev_ground = p->on_ground;
+    if (r->held.land > 0.0f) {
+        r->held.land -= dt * 3.2f;
+        if (r->held.land < 0.0f) r->held.land = 0.0f;
+    }
+    /* equip dip on slot switch */
+    if (slot.item != r->held.last_item) r->held.equip = 1.0f;
+    r->held.last_item = slot.item;
+    if (r->held.equip > 0.0f) {
+        r->held.equip -= dt * 4.0f;
+        if (r->held.equip < 0.0f) r->held.equip = 0.0f;
+    }
+    r->held.idle_t += dt;
+
+    /* ---- class-based placement (grip-relative) ---- */
+    bool is_tool = (def->tool != WL_TOOL_NONE);
+    bool is_torch = def->is_block && def->block_id == WL_BLOCK_TORCH;
+    bool is_cube = false;
+    if (def->is_block) {
+        const WlBlock *b = wl_block_get(def->block_id);
+        is_cube = (b && b->shape != WL_RENDER_CROSS && !is_torch);
+    }
+    float fwd_off, right_off, down_off, scale, grip_z;
+    /* keep the item inside the frustum: at fwd 0.85, offsets of 0.38
+     * right / 0.40 down stay under ~25 degrees of axis, inside the 55
+     * degree vertical fov with margin for the swing arc and bob */
+    if (is_tool || is_torch) {
+        fwd_off = 0.85f; right_off = 0.38f; down_off = 0.40f;
+        scale = 0.62f;  grip_z = 0.90f;   /* Z roll: handle across the palm */
+    } else if (is_cube) {
+        fwd_off = 0.85f; right_off = 0.42f; down_off = 0.34f;
+        scale = 0.30f;  grip_z = 0.35f;
+    } else {
+        fwd_off = 0.85f; right_off = 0.33f; down_off = 0.33f;
+        scale = 0.42f;  grip_z = 0.45f;
+    }
+
+    /* movement bob mirrors the player's walk cycle */
+    float bob_amt = p->bob_amount;
+    float bob_x = sinf(p->bob_phase) * 0.030f * bob_amt;
+    float bob_y = -fabsf(cosf(p->bob_phase)) * 0.024f * bob_amt;
+    /* idle breathing */
+    float idle_y = sinf(r->held.idle_t * 1.6f) * 0.009f;
+    float idle_roll = sinf(r->held.idle_t * 1.1f) * 0.020f;
+    /* sway from the damped spring (small, never 1:1 with the mouse) */
+    float sway_x = r->held.yaw_kick * 0.11f;
+    float sway_y = r->held.pitch_kick * 0.09f;
+    /* swing arc around the grip */
+    float swing_ph = (r->held.swing > 0.0f)
+                         ? sinf((1.0f - r->held.swing) * PI) : 0.0f;
+    float swing_rot = -swing_ph * 1.30f;
+    float land_dip = r->held.land * r->held.land * 0.11f;
+    float equip_dip = r->held.equip * r->held.equip * 0.20f;
+
+    Vector3 pos = Vector3Add(r->cam.position, Vector3Scale(f, fwd_off));
+    pos = Vector3Add(pos, Vector3Scale(right,
+                 right_off + bob_x * 0.7f + sway_x));
+    pos.y += -down_off + bob_y + idle_y + sway_y - land_dip - equip_dip;
+
+    /* rotation: orient to the camera, grip tilt, then swing/bob on top */
+    Matrix tf = MatrixMultiply(MatrixScale(scale, scale, scale),
+                               MatrixRotateX(swing_rot + r->held.land * 0.28f));
+    tf = MatrixMultiply(tf, MatrixRotateZ(grip_z + idle_roll + bob_x * 0.55f));
+    tf = MatrixMultiply(tf, MatrixRotateY(cam_yaw + PI));
+    tf = MatrixMultiply(tf, MatrixTranslate(pos.x, pos.y, pos.z));
 
     /* never buried in terrain: flush, clear depth, then draw on top of
      * everything while still lighting it like the world. A held torch
@@ -789,6 +1083,19 @@ static int ent_parts(WlEntityType t, const EntPart **out)
             parts[i].off.z *= scale;
             parts[i].size.x *= scale;
             parts[i].size.z *= scale;
+        }
+        if (t == WL_ENT_SHEEP) {
+            /* sheep: rounder, fluffier body, shorter legs and a lower
+             * head so the silhouette reads sheep, not small cow */
+            parts[0].size.x = 0.80f; parts[0].size.y = 0.68f;
+            parts[0].size.z = 1.10f; parts[0].off.y = 0.78f;
+            for (int i = 2; i < 6; i++) {
+                parts[i].size.y = 0.42f;
+                parts[i].off.y = 0.21f;
+            }
+            parts[1].size.x = 0.38f; parts[1].size.y = 0.38f;
+            parts[1].size.z = 0.38f;
+            parts[1].off.y = 0.98f; parts[1].off.z = -0.62f;
         }
         *out = parts;
         return 6;
@@ -958,11 +1265,60 @@ void wl_renderer_draw_entities(WlRenderer *r, WlWorld *w)
         const EntPart *parts;
         int n = ent_parts(e->type, &parts);
         if (!parts) continue;
+        {
+            static bool s_drawn[WL_ENT_TYPE_COUNT];
+            if (!s_drawn[e->type]) {
+                s_drawn[e->type] = true;
+                WL_LOGD("ent draw: type %d at %.1f,%.1f,%.1f dist %.1f",
+                        (int)e->type, e->pos.x, e->pos.y, e->pos.z,
+                        sqrtf(dx * dx + dz * dz));
+            }
+        }
 
-        ent_set_uniforms(r, light, hurt);
+        /* ---- animation drivers (all state-based, never random per
+         * frame): walk swing, spider wiggle, wing flap, idle breathing,
+         * head tracking / grazing, and the death fall-over ---- */
+        bool dying = e->death_timer > 0.0f;
+        float fall = dying ? 1.0f - e->death_timer / 0.9f : 0.0f;
+        fall = fall * fall * (3.0f - 2.0f * fall); /* smoothstep */
+        if (dying) light *= 1.0f - fall * 0.55f;  /* dim out */
+
+        ent_set_uniforms(r, light, dying ? 0.0f : hurt);
         float swing = sinf(e->anim_phase) * 0.7f;
         float wiggle = sinf(e->anim_phase * 3.0f) * 0.15f;
         float flap = e->on_ground ? 0.0f : sinf(e->live_ticks * 24.0f) * 0.9f;
+
+        float seed = (float)(e->id % 97) * 0.0628f;
+        /* idle breathing: subtle body pulse when standing still */
+        float hspeed2 = sqrtf(e->vel.x * e->vel.x + e->vel.z * e->vel.z);
+        float breathe = hspeed2 < 0.2f && e->on_ground
+                            ? sinf(e->live_ticks * 1.8f + seed) * 0.02f
+                            : 0.0f;
+
+        /* head aims at the player when nearby; passive animals graze
+         * instead while idle */
+        float head_yaw = 0.0f, head_pitch = 0.0f;
+        {
+            float ddx = cp.x - e->pos.x, ddz = cp.z - e->pos.z;
+            float dist2 = ddx * ddx + ddz * ddz;
+            if (dist2 < 14.0f * 14.0f) {
+                float want = atan2f(ddx, ddz);
+                float diff = want - e->yaw;
+                while (diff > PI) diff -= 2.0f * PI;
+                while (diff < -PI) diff += 2.0f * PI;
+                if (diff > 0.75f) diff = 0.75f;
+                if (diff < -0.75f) diff = -0.75f;
+                head_yaw = diff;
+            }
+            bool passive = !wl_entity_type_hostile(e->type) &&
+                           e->type != WL_ENT_ARROW;
+            if (passive && hspeed2 < 0.15f && e->on_ground && !dying) {
+                /* graze cycle: head down for a while, up for a while */
+                float cyc = sinf(e->live_ticks * 0.7f + seed * 3.0f);
+                if (cyc > 0.35f) head_pitch = 0.85f * (cyc - 0.35f) / 0.65f;
+                head_yaw *= 0.4f; /* less tracking while grazing */
+            }
+        }
 
         for (int k = 0; k < n; k++) {
             const EntPart *pd = &parts[k];
@@ -971,6 +1327,18 @@ void wl_renderer_draw_entities(WlRenderer *r, WlWorld *w)
 
             Matrix local;
             switch (pd->role) {
+            case PR_HEAD: {
+                /* pivot at the neck (bottom of the head box) so the
+                 * head turns/lowers naturally */
+                Matrix rot = MatrixMultiply(MatrixRotateY(head_yaw),
+                                            MatrixRotateX(head_pitch));
+                local = MatrixMultiply(
+                    MatrixMultiply(MatrixScale(pd->size.x, pd->size.y,
+                                               pd->size.z), rot),
+                    MatrixTranslate(pd->off.x, pd->off.y + pd->size.y * 0.5f,
+                                    pd->off.z));
+                break;
+            }
             case PR_LEG_L:
             case PR_LEG_R: {
                 float sw = (pd->role == PR_LEG_L ? swing : -swing);
@@ -1004,14 +1372,23 @@ void wl_renderer_draw_entities(WlRenderer *r, WlWorld *w)
                 local = MatrixMultiply(local, MatrixTranslate(pd->off.x, pd->off.y, pd->off.z));
                 break;
             }
-            default:
-                local = MatrixMultiply(MatrixScale(pd->size.x, pd->size.y, pd->size.z),
-                                       MatrixTranslate(pd->off.x, pd->off.y, pd->off.z));
+            default: {
+                float by = pd->size.y * (1.0f + breathe);
+                local = MatrixMultiply(MatrixScale(pd->size.x, by, pd->size.z),
+                                       MatrixTranslate(pd->off.x,
+                                                       pd->off.y - breathe * 0.5f,
+                                                       pd->off.z));
                 break;
             }
+            }
 
+            /* base: yaw orientation, then the death fall rotates the
+             * whole model around the entity's feet in world space */
             Matrix base = MatrixMultiply(MatrixRotateY(e->yaw),
-                                         MatrixTranslate(e->pos.x, e->pos.y, e->pos.z));
+                                         MatrixTranslate(e->pos.x, e->pos.y,
+                                                         e->pos.z));
+            if (dying)
+                base = MatrixMultiply(MatrixRotateZ(fall * 1.45f), base);
             Matrix tf = MatrixMultiply(local, base);
             DrawMesh(*m, r->mat_ent, tf);
         }
