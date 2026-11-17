@@ -481,6 +481,221 @@ def t_tool(kind, tier):
     return a
 
 
+
+# ---- furnace + food/material/crack/arrow painters (order matches tiles.h) ----
+
+def t_furnace_side():
+    a = t_stone()
+    rng = random.Random(301)
+    for y in range(16):
+        for x in range(16):
+            if (y == 0 or y == 15 or x == 0 or x == 15) and rng.random() < 0.5:
+                v = int(a[y, x, 0]) - 14
+                a[y, x, :3] = (max(0, v),) * 3
+    return a
+
+
+def t_furnace_front(lit=False):
+    a = t_furnace_side()
+    # firebox opening
+    a[9:14, 4:12] = (28, 26, 24, 255)
+    if lit:
+        rng = random.Random(302)
+        for y in range(10, 14):
+            for x in range(5, 11):
+                if rng.random() < 0.55 - (y - 10) * 0.1:
+                    a[y, x, :3] = (255, 170 + rng.randint(-30, 40), 40)
+                else:
+                    a[y, x, :3] = (120, 40, 20)
+    else:
+        a[9:14, 4:12] = (22, 20, 18, 255)
+    # rim
+    for x in range(4, 12):
+        a[8, x, :3] = (70, 70, 72)
+    return a
+
+
+def t_furnace_top():
+    a = t_stone()
+    for i in range(16):
+        a[i, 0, :3] = (58, 58, 60)
+        a[i, 15, :3] = (58, 58, 60)
+        a[0, i, :3] = (58, 58, 60)
+        a[15, i, :3] = (58, 58, 60)
+    a[5:11, 5:11] = (96, 96, 98, 255)
+    return a
+
+
+def _meat(raw, bone_in=False):
+    a = np.zeros((16, 16, 4), np.uint8)
+    body = raw
+    rng = random.Random(303)
+    for y in range(4, 13):
+        for x in range(3, 13):
+            dx = (x - 8) / 5.0
+            dy = (y - 8.2) / 4.2
+            if dx * dx + dy * dy < 1.0:
+                c = body
+                if rng.random() < 0.25:
+                    n = rng.randint(-18, 18)
+                    c = tuple(max(0, min(255, v + n)) for v in body)
+                a[y, x, :3] = c
+                a[y, x, 3] = 255
+    if bone_in:  # drumstick bone
+        for i in range(5):
+            a[12 - i, 11 + i // 2, :3] = (235, 228, 210)
+            a[12 - i, 11 + i // 2, 3] = 255
+        a[13, 13, :3] = (235, 228, 210); a[13, 13, 3] = 255
+        a[13, 11, :3] = (235, 228, 210); a[13, 11, 3] = 255
+    return a
+
+
+def t_leather_icon():
+    a = np.zeros((16, 16, 4), np.uint8)
+    rng = random.Random(304)
+    for y in range(3, 13):
+        for x in range(3, 13):
+            if (x in (3, 12) and y in (3, 12)):
+                continue
+            c = (146, 102, 62)
+            if rng.random() < 0.3:
+                n = rng.randint(-14, 10)
+                c = tuple(max(0, v + n) for v in c)
+            a[y, x, :3] = c
+            a[y, x, 3] = 255
+    return a
+
+
+def t_feather_icon():
+    a = np.zeros((16, 16, 4), np.uint8)
+    rng = random.Random(305)
+    for i in range(10):
+        y = 13 - i
+        x = 4 + i // 2
+        w = 1 + (i if i < 4 else 4) // 2
+        for k in range(w + 1):
+            if 0 <= x + k < 16 and 0 <= y < 16:
+                c = (238, 240, 244) if k < w else (200, 202, 208)
+                if rng.random() < 0.2:
+                    c = tuple(v - 14 for v in c)
+                a[y, x + k, :3] = c
+                a[y, x + k, 3] = 255
+    a[13, 3, :3] = (160, 150, 140); a[13, 3, 3] = 255
+    return a
+
+
+def t_wool_icon():
+    a = np.zeros((16, 16, 4), np.uint8)
+    rng = random.Random(306)
+    for y in range(2, 14):
+        for x in range(2, 14):
+            if (x - 8) ** 2 + (y - 8) ** 2 < 36:
+                n = rng.randint(-10, 12)
+                a[y, x, :3] = (232 + n // 2, 230 + n // 2, 226 + n // 2)
+                a[y, x, 3] = 255
+    return a
+
+
+def t_ingot(color=(216, 200, 190), seed=307):
+    a = np.zeros((16, 16, 4), np.uint8)
+    rng = random.Random(seed)
+    for y in range(6, 12):
+        x0 = 2 + (11 - y) // 2
+        x1 = 13 - (11 - y) // 2
+        for x in range(x0, x1):
+            shade = 1.0 - 0.04 * (11 - y)
+            c = tuple(min(255, int(v * shade + rng.randint(-6, 6))) for v in color)
+            a[y, x, :3] = c
+            a[y, x, 3] = 255
+    return a
+
+
+def t_rotten_flesh_icon():
+    a = _meat((120, 92, 60))
+    rng = random.Random(310)
+    for _ in range(10):
+        y = rng.randrange(5, 12)
+        x = rng.randrange(4, 12)
+        a[y, x, :3] = (86, 110, 58)  # mouldy green spots
+    return a
+
+
+def t_string_icon():
+    a = np.zeros((16, 16, 4), np.uint8)
+    rng = random.Random(311)
+    y = 2.0
+    for x in range(3, 13):
+        y += rng.uniform(-0.8, 0.8)
+        iy = int(round(y))
+        for k in (-1, 0, 1):
+            if 0 <= iy + k < 16:
+                a[iy + k, x, :3] = (226, 222, 210)
+                a[iy + k, x, 3] = 255
+    return a
+
+
+def t_bone_icon():
+    a = np.zeros((16, 16, 4), np.uint8)
+    for i in range(9):
+        x = 3 + i
+        y = 12 - i
+        a[y, x, :3] = (232, 226, 210); a[y, x, 3] = 255
+        a[y, x + 1, :3] = (216, 210, 194); a[y, x + 1, 3] = 255
+    for dx, dy in ((-1, 1), (0, 0), (0, 2), (1, -1), (1, 1)):
+        a[4 + dy, 11 + dx, :3] = (240, 236, 224)
+        a[4 + dy, 11 + dx, 3] = 255
+    for dx, dy in ((-1, -1), (-1, 1), (0, 0), (1, 0), (0, 1)):
+        a[10 + dy, 4 + dx, :3] = (240, 236, 224)
+        a[10 + dy, 4 + dx, 3] = 255
+    return a
+
+
+def t_arrow_icon():
+    a = np.zeros((16, 16, 4), np.uint8)
+    for i in range(9):
+        x = 3 + i
+        y = 12 - i
+        a[y, x, :3] = (109, 85, 50); a[y, x, 3] = 255
+        a[y, x + 1, :3] = (96, 74, 42); a[y, x + 1, 3] = 255
+    # head
+    for dx, dy in ((0, 0), (-1, -1), (1, 1), (0, -1), (0, 1)):
+        a[12 - 8 + dy, 11 + dx, :3] = (208, 212, 218)
+        a[12 - 8 + dy, 11 + dx, 3] = 255
+    # fletching
+    for i in range(3):
+        a[12 - i, 3 + i, :3] = (238, 240, 244); a[12 - i, 3 + i, 3] = 255
+        a[13 - i, 4 + i, :3] = (210, 212, 218); a[13 - i, 4 + i, 3] = 255
+    return a
+
+
+def t_crack(stage):
+    """Progressive crack pattern: stage 0..9, dark alpha cracks radiating out."""
+    a = np.zeros((16, 16, 4), np.uint8)
+    alpha = 190 + stage * 6
+    dark = np.array([12, 10, 9, alpha], np.uint8)
+    # one main crack for stage 0, more branches as damage grows
+    n_lines = 2 + stage
+    for idx in range(n_lines):
+        rng = random.Random(500 + idx)
+        ang = (idx * 2.399963) % (2 * 3.14159265)
+        x, y = 7.5, 7.5
+        dx, dy = math.cos(ang), math.sin(ang)
+        length = 3.0 + stage * 1.1
+        for step in range(int(length * 2)):
+            t = step / max(1.0, length * 2)
+            # wobble for a natural look
+            wob = (rng.random() - 0.5) * 0.6
+            x = 7.5 + (dx + wob * dy) * t * (2.0 + stage * 0.85)
+            y = 7.5 + (dy + wob * dx) * t * (2.0 + stage * 0.85)
+            ix, iy = int(round(x)), int(round(y))
+            for ox in (0, 1):
+                for oy in (0, 1):
+                    jx, jy = ix + ox, iy + oy
+                    if 0 <= jx < 16 and 0 <= jy < 16 and rng.random() < 0.8:
+                        a[jy, jx] = dark
+    return a
+
+
 TILE_PAINTERS = [
     ("stone", t_stone),                       # 0
     ("dirt", t_dirt),                         # 1
@@ -524,15 +739,7 @@ TILE_PAINTERS = [
     ("icon_apple", t_apple),                  # 39
 ]
 
-TILE_PAINTERS[13] = ("birch_log_side", lambda: _birch_side())
-TILE_PAINTERS[14] = ("birch_log_top", lambda: _birch_top())
-TILE_PAINTERS[16] = ("gravel", lambda: _gravel())
-TILE_PAINTERS[17] = ("coal_ore", lambda: t_ore((35, 35, 38), 130))
-TILE_PAINTERS[18] = ("iron_ore", lambda: t_ore((216, 175, 147), 131))
-TILE_PAINTERS[19] = ("gold_ore", lambda: t_ore((252, 222, 112), 132))
-TILE_PAINTERS[20] = ("diamond_ore", lambda: t_ore((92, 219, 213), 133))
-
-
+# birch / gravel / ore tiles referenced by index above
 def _birch_side():
     a = noise_fill((196, 187, 168), 5, 134)
     rng = random.Random(135)
@@ -562,10 +769,43 @@ def _gravel():
     return a
 
 
+TILE_PAINTERS[13] = ("birch_log_side", lambda: _birch_side())
+TILE_PAINTERS[14] = ("birch_log_top", lambda: _birch_top())
+TILE_PAINTERS[16] = ("gravel", lambda: _gravel())
+TILE_PAINTERS[17] = ("coal_ore", lambda: t_ore((35, 35, 38), 130))
+TILE_PAINTERS[18] = ("iron_ore", lambda: t_ore((216, 175, 147), 131))
+TILE_PAINTERS[19] = ("gold_ore", lambda: t_ore((252, 222, 112), 132))
+TILE_PAINTERS[20] = ("diamond_ore", lambda: t_ore((92, 219, 213), 133))
+
+
 # tool icons appended after the base 40 tiles (order must match tiles.h)
 for kind in ("pick", "axe", "shovel", "sword"):
     for tier in ("wood", "stone", "iron", "diamond"):
         TILE_PAINTERS.append((f"icon_{kind}_{tier}", (lambda k=kind, t=tier: t_tool(k, t))))
+
+TILE_PAINTERS += [
+    ("furnace_side", t_furnace_side),                       # 64
+    ("furnace_front", lambda: t_furnace_front(False)),      # 65
+    ("furnace_front_lit", lambda: t_furnace_front(True)),   # 66
+    ("furnace_top", t_furnace_top),                         # 67
+    ("icon_leather", t_leather_icon),                       # 68
+    ("icon_feather", t_feather_icon),                       # 69
+    ("icon_wool", t_wool_icon),                             # 70
+    ("icon_iron_ingot", lambda: t_ingot((216, 200, 190))),  # 71
+    ("icon_beef_raw", lambda: _meat((196, 70, 62))),        # 72
+    ("icon_beef_cooked", lambda: _meat((146, 84, 44))),     # 73
+    ("icon_pork_raw", lambda: _meat((235, 154, 148))),      # 74
+    ("icon_pork_cooked", lambda: _meat((188, 124, 76))),    # 75
+    ("icon_chicken_raw", lambda: _meat((232, 184, 168), bone_in=True)),   # 76
+    ("icon_chicken_cooked", lambda: _meat((196, 132, 74), bone_in=True)), # 77
+    ("icon_mutton_raw", lambda: _meat((214, 96, 92))),      # 78
+    ("icon_mutton_cooked", lambda: _meat((158, 94, 54))),   # 79
+    ("icon_arrow", t_arrow_icon),                           # 72
+    ("icon_rotten_flesh", t_rotten_flesh_icon),             # 73
+    ("icon_string", t_string_icon),                         # 74
+    ("icon_bone", t_bone_icon),                             # 75
+] + [("crack_%d" % s, (lambda s=s: t_crack(s))) for s in range(10)]  # 76..85
+
 
 
 def build_atlas():
@@ -787,6 +1027,78 @@ def lowpass(x, a=0.12):
     return y
 
 
+def highpass_band(x, lo, hi):
+    """Crude band emphasis: difference of two one-pole lowpasses."""
+    a = lowpass(x, hi)
+    b = lowpass(x, lo)
+    return a - b
+
+
+def gen_entity_atlas():
+    """Mob/animal part skins. 16x16 tiles; each part's four faces map to
+    quadrants: front=TL, side=TR, top=BL, bottom=BR."""
+    def skin(base, speckle, seed, features=None):
+        a = noise_fill(base, speckle, seed)
+        if features:
+            features(a)
+        return a
+
+    def eyes(a, color, y=5, x0=3, x1=11):
+        for x in (x0, x1):
+            for dy in range(2):
+                for dx in range(2):
+                    a[y + dy, x + dx, :3] = color
+
+    E = A / "textures" / "entities.png"
+    E.parent.mkdir(parents=True, exist_ok=True)
+    atlas = Image.new("RGBA", (256, 256), (0, 0, 0, 0))
+
+    slots = {}
+
+    def put(name, painter):
+        idx = len(slots)
+        slots[name] = idx
+        paint_at(atlas, idx, painter())
+
+    put("zombie_head", lambda: skin((96, 138, 78), 8, 601,
+                                    lambda a: eyes(a, (20, 28, 20))))
+    put("zombie_body", lambda: skin((58, 88, 120), 7, 602))
+    put("zombie_limb", lambda: skin((84, 120, 70), 8, 603))
+    put("skel_head", lambda: skin((206, 202, 190), 6, 604,
+                                  lambda a: eyes(a, (30, 30, 30))))
+    put("skel_body", lambda: skin((188, 184, 172), 6, 605))
+    put("skel_limb", lambda: skin((198, 194, 182), 5, 606))
+    put("spider_body", lambda: skin((44, 38, 40), 6, 607))
+    put("spider_head", lambda: skin((52, 44, 46), 6, 608,
+                                    lambda a: eyes(a, (196, 40, 40), y=5, x0=4, x1=10)))
+    put("spider_leg", lambda: skin((38, 33, 35), 5, 609))
+    put("cow_body", lambda: skin((96, 66, 48), 9, 610))
+    put("cow_head", lambda: skin((104, 72, 52), 8, 611,
+                                 lambda a: eyes(a, (25, 22, 20))))
+    put("cow_leg", lambda: skin((80, 56, 42), 7, 612))
+    put("pig_body", lambda: skin((228, 156, 148), 7, 613))
+    put("pig_head", lambda: skin((232, 164, 156), 7, 614,
+                                 lambda a: eyes(a, (30, 26, 26))))
+    put("pig_leg", lambda: skin((214, 142, 134), 6, 615))
+    put("chicken_body", lambda: skin((232, 228, 220), 6, 616))
+    put("chicken_head", lambda: skin((236, 232, 224), 6, 617,
+                                     lambda a: eyes(a, (30, 28, 26))))
+    put("chicken_leg", lambda: skin((212, 168, 84), 5, 618))
+    put("chicken_wing", lambda: skin((220, 214, 204), 6, 619))
+    put("sheep_body", lambda: skin((234, 230, 222), 10, 620))
+    put("sheep_head", lambda: skin((198, 178, 152), 7, 621,
+                                   lambda a: eyes(a, (30, 28, 26))))
+    put("sheep_leg", lambda: skin((210, 196, 172), 6, 622))
+    put("arrow", t_arrow_icon)
+
+    atlas.save(E)
+    with open(E.with_suffix(".txt"), "w") as f:
+        f.write("# entity atlas tile ids (16x16 grid)\n")
+        for name, idx in slots.items():
+            f.write(f"{name} = {idx}\n")
+    print(f"wrote {E} ({len(slots)} part tiles)")
+
+
 def gen_sounds():
     rng = np.random.default_rng(401)
     out = A / "audio"
@@ -827,6 +1139,25 @@ def gen_sounds():
     f = 300 - 700 * t
     x = np.sign(np.sin(2 * np.pi * np.cumsum(f) / SR)) * 0.35 * env_exp(n, 14)
     write_wav(out / "hurt.wav", x)
+
+    n = int(0.18 * SR)  # mob hurt: low thud + growl
+    t = np.arange(n) / SR
+    x = np.sin(2 * np.pi * 96 * t) * env_exp(n, 26) * 0.8
+    x += lowpass(rng.standard_normal(n), 0.12) * env_exp(n, 30) * 0.7
+    write_wav(out / "mob_hurt.wav", x * 0.8)
+
+    n = int(0.16 * SR)  # bow: whoosh with rising pitch
+    t = np.arange(n) / SR
+    f = 240 + 900 * t / n
+    x = np.sin(2 * np.pi * np.cumsum(f) / SR) * env_exp(n, 26) * 0.4
+    x += highpass_band(rng.standard_normal(n), 0.35, 0.65) * env_exp(n, 22) * 0.5
+    write_wav(out / "bow.wav", x)
+
+    n = int(0.09 * SR)  # item pickup: bright pop
+    t = np.arange(n) / SR
+    x = np.sin(2 * np.pi * 660 * t) * env_exp(n, 90) * 0.5
+    x += np.sin(2 * np.pi * 990 * t) * env_exp(n, 110) * 0.3
+    write_wav(out / "pickup.wav", x)
 
     n = int(0.3 * SR)  # eat: three crunches
     x = np.zeros(n)
@@ -922,6 +1253,7 @@ def main():
     for sub in ("textures", "gui", "environment", "audio", "music"):
         (A / sub).mkdir(parents=True, exist_ok=True)
     build_atlas()
+    gen_entity_atlas()
     gui_button(); gui_panel(); gui_slot(False); gui_slot(True); gui_logo()
     gui_heart(True); gui_heart(False); gui_hunger(True); gui_hunger(False)
     gui_crosshair()

@@ -24,7 +24,8 @@ bool wl_raycast(struct WlWorld *w, Vector3 origin, Vector3 dir, float max_dist,
 /* Result codes for the game loop. */
 enum {
     WL_INTERACT_NONE = 0,
-    WL_INTERACT_OPEN_CRAFT, /* right-clicked a crafting table */
+    WL_INTERACT_OPEN_CRAFT,   /* right-clicked a crafting table */
+    WL_INTERACT_OPEN_FURNACE, /* right-clicked a furnace */
 };
 
 int wl_interact_update(struct WlPlayer *p, struct WlWorld *w,

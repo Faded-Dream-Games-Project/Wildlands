@@ -241,10 +241,10 @@ static void test_crafting(void)
        .  M  M
        .  S  M
        .  S  .  */
-    grid[1] = (WlSlot){ WL_ITEM_RAW_IRON, 1, 0 };
-    grid[2] = (WlSlot){ WL_ITEM_RAW_IRON, 1, 0 };
+    grid[1] = (WlSlot){ WL_ITEM_IRON_INGOT, 1, 0 };
+    grid[2] = (WlSlot){ WL_ITEM_IRON_INGOT, 1, 0 };
     grid[4] = (WlSlot){ WL_ITEM_STICK, 1, 0 };
-    grid[5] = (WlSlot){ WL_ITEM_RAW_IRON, 1, 0 };
+    grid[5] = (WlSlot){ WL_ITEM_IRON_INGOT, 1, 0 };
     grid[7] = (WlSlot){ WL_ITEM_STICK, 1, 0 };
     r = wl_crafting_match(grid, 3);
     CHECK(r && r->out_item == WL_ITEM_AXE_IRON);
@@ -382,7 +382,11 @@ static void test_tiles_contract(void)
     CHECK(TILE_DIRT == 1);
     CHECK(TILE_ICON_APPLE == 39);
     CHECK(TILE_ICON_SWORD_DIAMOND == 55);
-    CHECK(TILE_BASE_COUNT == 56);
+    CHECK(TILE_FURNACE_SIDE == 56);
+    CHECK(TILE_ICON_ARROW == 72);
+    CHECK(TILE_ICON_BONE == 75);
+    CHECK(TILE_CRACK_9 == 85);
+    CHECK(TILE_BASE_COUNT == 86);
 }
 
 static void test_tile_uv(void)

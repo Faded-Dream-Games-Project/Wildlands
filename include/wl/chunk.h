@@ -27,6 +27,11 @@ typedef struct WlChunk {
     uint8_t blocks[WL_CHUNK_VOL];
     uint8_t biome[WL_CHUNK_AREA];
     uint8_t top[WL_CHUNK_AREA];       /* first free y above highest opaque block */
+    /* per-voxel light: high nibble = skylight 0..15, low = block light.
+     * Derived data (never saved): recomputed by src/world/light.c. */
+    uint8_t light[WL_CHUNK_VOL];
+    uint32_t border_sum[4];           /* N/E/S/W light checksums for cascades */
+    bool light_dirty;                 /* needs a relight before meshing */
     bool generated;                   /* block data is valid */
     bool modified;                    /* has player edits, must be saved */
     bool dirty_mesh;                  /* needs remeshing */

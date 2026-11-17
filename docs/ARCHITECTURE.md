@@ -47,6 +47,8 @@ wl_game_run_frame
   |       interact_update   (raycast, mining progress, placement)
   |       world_update      (stream chunks, adopt generated, budget meshes)
   |       world_update_drops (drop physics + player pickup)
+  |       world_update_entities (mob/animal AI, arrows, spawner)
+  |       furnaces_update (smelting tick)
   |       renderer_begin    (camera from player, sky colors, fog)
   |       renderer_draw_world (sky -> sun/moon -> chunks -> clouds -> water)
   |       renderer_draw_drops + draw_held_item (depth-cleared, camera space)
@@ -97,6 +99,47 @@ wl_game_run_frame
   white / untextured after moving the mouse" bug; `WL_NO_DEPTHCLEAR=1`
   restores the old behaviour for A/B regression runs
   (`tools/repro_render.sh`, `tools/verify_battery.sh`).
+
+## Lighting
+
+- Per-voxel light in every chunk, one byte per voxel: high nibble
+  skylight, low nibble block light (0..15 each). Derived data — torches
+  and lit furnaces are blocks, so nothing light-related is saved.
+- `src/world/light.c` recomputes a chunk with two BFS passes (sky
+  columns seeded from the top, emitters seeded from block defs) plus
+  border imports from the four side neighbors. Border checksums detect
+  changes and mark neighbors light+mesh dirty so propagation crosses
+  chunk boundaries.
+- The mesher bakes two brightness channels into vertex colors
+  (r = block light, g = skylight, both with face shade + AO); the chunk
+  shader combines `max(r, g * dayAmbient)`, so torch light stays bright
+  at night while the sky channel follows the day/night cycle.
+- Edits mark their chunk light-dirty; the mesh step relights before
+  rebuilding, so torch place/remove and block changes update the world
+  within a frame.
+
+## Entities
+
+- `WlEntity` array in the world (like drops): zombies, skeletons,
+  spiders, arrows, cows, pigs, chickens, sheep. AI per type in
+  `src/gameplay/entities.c` (chase/keep-distance/wander/flee), shared
+  axis-separated AABB collision with auto-jump, and a natural spawner
+  that uses the lighting engine: hostiles need darkness (night surface
+  or caves), animals need sunlit grass in plains/forest.
+- Rendered as animated box models: per-type part tables (body, head,
+  swinging legs, zombie arms held forward, spider legs, chicken wings),
+  skinned from `assets/textures/entities.png` through the entity shader
+  with per-entity light sampled from the voxel grid plus a hurt flash.
+- Persist in `entities.dat`; arrows are transient.
+
+## Furnaces
+
+- Block entities keyed by position (`WlFurnace` array in the world):
+  input/fuel/output stacks, burn timer and smelt progress. The tick in
+  `src/gameplay/furnace.c` ignites fuel, consumes input, respects
+  output stack limits and swaps the world block between furnace and
+  furnace_lit (which emits light 13). Contents persist in
+  `furnaces.dat`; breaking a furnace drops its stacks.
 
 ## Dropped items
 

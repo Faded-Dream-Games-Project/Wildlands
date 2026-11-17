@@ -38,6 +38,8 @@ enum {
     WL_BLOCK_FLOWER_RED,
     WL_BLOCK_FLOWER_YELLOW,
     WL_BLOCK_TALLGRASS,
+    WL_BLOCK_FURNACE,
+    WL_BLOCK_FURNACE_LIT,
     WL_BLOCK_COUNT_BASE
 };
 
@@ -70,6 +72,7 @@ typedef struct {
     uint16_t drop_item;  /* item id dropped (WL_ITEM_NONE = nothing) */
     uint8_t drop_count;
     bool gravity;        /* falls when the block below is removed */
+    uint8_t light;       /* light emission 0..15 (torch 14, lit furnace 13) */
 } WlBlock;
 
 /* Registers base blocks. Call once at startup, before loading mods. */

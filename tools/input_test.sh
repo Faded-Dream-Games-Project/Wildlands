@@ -251,5 +251,139 @@ sys.exit(0 if s1 > s0 + 8 else 1)
 PYCHK
 check "mined block appears as a visible hotbar item" $?
 
+# ---------------------------------------------------------------- run 4
+say "night lighting: place a torch in the dark via real input"
+rm -rf worlds/TorchNight
+find screenshots -name '*.png' ! -name 'README.md-screenshot.png' -delete 2>/dev/null
+DISPLAY=$XVFB_DISP LIBGL_ALWAYS_SOFTWARE=1 ./bin/wildlands \
+    --world TorchNight --seed 3 --frames 4000 --time 15000 \
+    --overlay inv --pitch -25 >"$OUT/torch.out" 2>&1 &
+GAME_PID=$!
+for _ in $(seq 1 100); do
+    ./tools/xsend $XVFB_DISP Wildlands move 640 360 >/dev/null 2>&1 && break
+    sleep 0.2
+done
+TLOG=$(latest_log)
+for _ in $(seq 1 300); do
+    TLOG=$(latest_log)
+    [ -n "$TLOG" ] && grep -q "demo pos" "$TLOG" 2>/dev/null && break
+    sleep 0.2
+done
+sleep 1
+./tools/xsend $XVFB_DISP Wildlands key e 80       # close inventory
+sleep 0.6
+./tools/xsend $XVFB_DISP Wildlands key 8 80       # slot 7 = torch
+sleep 0.6
+./tools/xsend $XVFB_DISP Wildlands click right 200 # place the torch
+sleep 3
+./tools/xsend $XVFB_DISP Wildlands key F2 60
+sleep 1.2
+kill $GAME_PID 2>/dev/null; wait $GAME_PID 2>/dev/null; GAME_PID=""
+
+TORCH_SHOT=$(ls -t screenshots/*.png 2>/dev/null | head -1)
+python3 - "$TORCH_SHOT" <<'PYCHK'
+import sys
+from PIL import Image
+import numpy as np
+a = np.asarray(Image.open(sys.argv[1]).convert("RGB"), dtype=np.float32)
+lum = a.mean(axis=2)
+r, g, b = a[:,:,0], a[:,:,1], a[:,:,2]
+scene = lum[:640]
+rs, gs, bs = r[:640], g[:640], b[:640]
+warm = ((rs>90)&(rs<255)&(rs>gs+10)&(gs>bs)).sum()
+print(f"  torch pool: warm px={warm} scene mean={scene.mean():.0f}")
+sys.exit(0 if warm > 3000 else 1)
+PYCHK
+check "placed torch illuminates the night scene" $?
+
+# ---------------------------------------------------------------- run 5
+say "furnace: place it, open the UI, smelt with real clicks"
+find screenshots -name '*.png' ! -name 'README.md-screenshot.png' -delete 2>/dev/null
+rm -rf worlds/FurnUITest
+DISPLAY=$XVFB_DISP LIBGL_ALWAYS_SOFTWARE=1 ./bin/wildlands \
+    --world FurnUITest --seed 3 --frames 4000 --overlay inv --pitch -30 \
+    >"$OUT/furn.out" 2>&1 &
+GAME_PID=$!
+for _ in $(seq 1 100); do
+    ./tools/xsend $XVFB_DISP Wildlands move 640 360 >/dev/null 2>&1 && break
+    sleep 0.2
+done
+FLOG=$(latest_log)
+for _ in $(seq 1 300); do
+    FLOG=$(latest_log)
+    [ -n "$FLOG" ] && grep -q "demo pos" "$FLOG" 2>/dev/null && break
+    sleep 0.2
+done
+sleep 1
+./tools/xsend $XVFB_DISP Wildlands key e 80       # close inventory
+sleep 0.6
+./tools/xsend $XVFB_DISP Wildlands key 9 80       # slot 8 = furnace
+sleep 0.6
+./tools/xsend $XVFB_DISP Wildlands click right 200 # place the furnace
+sleep 2
+./tools/xsend $XVFB_DISP Wildlands click right 200 # open the furnace UI
+sleep 1.5
+./tools/xsend $XVFB_DISP Wildlands key F2 60      # screenshot the UI
+sleep 1
+kill $GAME_PID 2>/dev/null; wait $GAME_PID 2>/dev/null; GAME_PID=""
+
+FURN_SHOT=$(ls -t screenshots/*.png 2>/dev/null | head -1)
+python3 - "$FURN_SHOT" <<'PYCHK'
+import sys
+from PIL import Image
+import numpy as np
+a = np.asarray(Image.open(sys.argv[1]).convert("RGB"), dtype=np.float32)
+h, w, _ = a.shape
+# furnace panel: centered, with the title band and slot structure
+panel = a[int(h*0.30):int(h*0.70), int(w*0.35):int(w*0.65)]
+ok = panel.std() > 14
+print(f"  furnace UI: panel-std={panel.std():.1f}")
+sys.exit(0 if ok else 1)
+PYCHK
+check "furnace placed and its UI opens on right-click" $?
+
+# ---------------------------------------------------------------- run 6
+say "Q-drop: drop the selected item into the world"
+find screenshots -name '*.png' ! -name 'README.md-screenshot.png' -delete 2>/dev/null
+rm -rf worlds/QDropTest
+DISPLAY=$XVFB_DISP LIBGL_ALWAYS_SOFTWARE=1 ./bin/wildlands \
+    --world QDropTest --seed 3 --frames 4000 --overlay inv --pitch -20 \
+    >"$OUT/qdrop.out" 2>&1 &
+GAME_PID=$!
+for _ in $(seq 1 100); do
+    ./tools/xsend $XVFB_DISP Wildlands move 640 360 >/dev/null 2>&1 && break
+    sleep 0.2
+done
+QLOG=$(latest_log)
+for _ in $(seq 1 300); do
+    QLOG=$(latest_log)
+    [ -n "$QLOG" ] && grep -q "demo pos" "$QLOG" 2>/dev/null && break
+    sleep 0.2
+done
+sleep 1
+./tools/xsend $XVFB_DISP Wildlands key e 80       # close inventory
+sleep 0.6
+./tools/xsend $XVFB_DISP Wildlands key 2 80       # slot 1 = Oak Log x12
+sleep 0.6
+./tools/xsend $XVFB_DISP Wildlands key q 80       # drop the stack
+sleep 1.5
+./tools/xsend $XVFB_DISP Wildlands key F2 60      # the logs lie in the world
+sleep 1
+kill $GAME_PID 2>/dev/null; wait $GAME_PID 2>/dev/null; GAME_PID=""
+
+Q_SHOT=$(ls -t screenshots/*.png 2>/dev/null | head -1)
+python3 - "$Q_SHOT" <<'PYCHK'
+import sys
+from PIL import Image
+import numpy as np
+a = np.asarray(Image.open(sys.argv[1]).convert("RGB"), dtype=np.float32)
+r, g, b = a[:,:,0], a[:,:,1], a[:,:,2]
+# dropped oak logs: warm wood colors in the world (not the HUD strip)
+brown = ((r>90)&(r<210)&(g>60)&(g<r-10)&(b<g-8)&(b<r-25))[:640]
+print(f"  dropped logs: wood px={brown.sum()}")
+sys.exit(0 if brown.sum() > 400 else 1)
+PYCHK
+check "Q drops the selected stack into the world" $?
+
 say "done"
 exit $fail

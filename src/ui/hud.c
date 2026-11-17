@@ -64,17 +64,19 @@ static void draw_survival_stats(WlGame *g)
     float slot_w = 44.0f * ui->scale;
     float hb_x = (sw - slot_w * WL_HOTBAR_SIZE) / 2.0f;
     float hb_y = sh - slot_w - 12.0f * ui->scale;
-    float icon = 18.0f * ui->scale;
+    float icon = 16.0f * ui->scale;
+    float gap = 2.0f * ui->scale;
     float row_y = hb_y - icon - 8 * ui->scale;
+    float hunger_y = row_y - icon - 5 * ui->scale; /* own row: no overlap */
 
     Texture heart = wl_assets_tex(g->assets, WL_TEX_GUI_HEART);
     Texture heart_e = wl_assets_tex(g->assets, WL_TEX_GUI_HEART_EMPTY);
     Texture hunger = wl_assets_tex(g->assets, WL_TEX_GUI_HUNGER);
     Texture hunger_e = wl_assets_tex(g->assets, WL_TEX_GUI_HUNGER_EMPTY);
 
-    /* hearts: 10 icons, 2 health points each */
+    /* hearts: 10 icons, 2 health points each (bottom row, left side) */
     for (int i = 0; i < 10; i++) {
-        float x = hb_x + i * (icon + 2 * ui->scale);
+        float x = hb_x + i * (icon + gap);
         Rectangle dst = { x, row_y, icon, icon };
         Rectangle src_full = { 0, 0, (float)heart.width, (float)heart.height };
         DrawTexturePro(heart_e, src_full, dst, (Vector2){ 0, 0 }, 0.0f, WHITE);
@@ -87,11 +89,13 @@ static void draw_survival_stats(WlGame *g)
         }
     }
 
-    /* hunger: 10 icons, right-aligned, mirrored order */
+    /* hunger: 10 icons on its OWN row above the hearts, right-aligned
+     * to the hotbar's right edge — never touching the hearts at any
+     * UI scale or resolution */
     float hb_r = hb_x + slot_w * WL_HOTBAR_SIZE;
     for (int i = 0; i < 10; i++) {
-        float x = hb_r - icon - i * (icon + 2 * ui->scale);
-        Rectangle dst = { x, row_y, icon, icon };
+        float x = hb_r - icon - i * (icon + gap);
+        Rectangle dst = { x, hunger_y, icon, icon };
         Rectangle src_full = { 0, 0, (float)hunger.width, (float)hunger.height };
         DrawTexturePro(hunger_e, src_full, dst, (Vector2){ 0, 0 }, 0.0f, WHITE);
         float hu = p->hunger - i * 2.0f;
@@ -108,9 +112,9 @@ static void draw_survival_stats(WlGame *g)
         int bubbles = (int)ceilf(p->air / 2.0f);
         for (int i = 0; i < bubbles && i < 10; i++) {
             float x = hb_x + i * (icon + 2 * ui->scale);
-            DrawCircle((int)(x + icon / 2), (int)(row_y - icon - 6 * ui->scale),
+            DrawCircle((int)(x + icon / 2), (int)(hunger_y),
                        icon * 0.42f, (Color){ 70, 130, 210, 230 });
-            DrawCircleLines((int)(x + icon / 2), (int)(row_y - icon - 6 * ui->scale),
+            DrawCircleLines((int)(x + icon / 2), (int)(hunger_y),
                             icon * 0.42f, (Color){ 30, 60, 110, 255 });
         }
     }

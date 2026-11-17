@@ -184,13 +184,20 @@ void wl_crafting_init(void)
         add_shaped(WL_BLOCK_SANDSTONE, 1, 2, 2, pat);
     }
 
+    /* furnace: 8 cobblestone in a ring (standard pattern) */
+    {
+        uint16_t C = WL_BLOCK_COBBLE;
+        uint16_t pat[9] = { C, C, C,  C, 0, C,  C, C, C };
+        add_shaped(WL_BLOCK_FURNACE, 1, 3, 3, pat);
+    }
+
     /* tools: material row + stick handle */
     struct { uint16_t mat; uint16_t pick, axe, shovel, sword; } tiers[] = {
         { WL_BLOCK_PLANKS,     WL_ITEM_PICK_WOOD,    WL_ITEM_AXE_WOOD,
           WL_ITEM_SHOVEL_WOOD, WL_ITEM_SWORD_WOOD },
         { WL_BLOCK_COBBLE,     WL_ITEM_PICK_STONE,   WL_ITEM_AXE_STONE,
           WL_ITEM_SHOVEL_STONE, WL_ITEM_SWORD_STONE },
-        { WL_ITEM_RAW_IRON,    WL_ITEM_PICK_IRON,    WL_ITEM_AXE_IRON,
+        { WL_ITEM_IRON_INGOT,   WL_ITEM_PICK_IRON,    WL_ITEM_AXE_IRON,
           WL_ITEM_SHOVEL_IRON, WL_ITEM_SWORD_IRON },
         { WL_ITEM_DIAMOND,     WL_ITEM_PICK_DIAMOND, WL_ITEM_AXE_DIAMOND,
           WL_ITEM_SHOVEL_DIAMOND, WL_ITEM_SWORD_DIAMOND },

@@ -108,8 +108,14 @@ static bool mb_reserve_i(MeshBuf *b, int add)
     return true;
 }
 
+/* Vertex color packing for the chunk shader:
+ *   r = block-light brightness, g = sky-light brightness (both already
+ *   include face shade + AO), b = max of the two (compat/debug),
+ *   a = fragment alpha (water). The shader combines:
+ *   light = max(r, g * dayAmbient). */
 static void emit_quad(MeshBuf *b, const float pos[4][3], float u0, float v0,
-                      float u1, float v1, const float bright[4], float alpha)
+                      float u1, float v1, const float bright[4],
+                      const float skyb[4], float alpha)
 {
     if (!mb_reserve_v(b, 4) || !mb_reserve_i(b, 6)) return;
 
@@ -126,15 +132,16 @@ static void emit_quad(MeshBuf *b, const float pos[4][3], float u0, float v0,
     for (int k = 0; k < 4; k++) {
         b->uv[(base + k) * 2 + 0] = uvs[k][0];
         b->uv[(base + k) * 2 + 1] = uvs[k][1];
-        unsigned char c = (unsigned char)(bright[k] * 255.0f + 0.5f);
-        b->col[(base + k) * 4 + 0] = c;
-        b->col[(base + k) * 4 + 1] = c;
-        b->col[(base + k) * 4 + 2] = c;
+        float m = bright[k] > skyb[k] ? bright[k] : skyb[k];
+        b->col[(base + k) * 4 + 0] = (unsigned char)(bright[k] * 255.0f + 0.5f);
+        b->col[(base + k) * 4 + 1] = (unsigned char)(skyb[k] * 255.0f + 0.5f);
+        b->col[(base + k) * 4 + 2] = (unsigned char)(m * 255.0f + 0.5f);
         b->col[(base + k) * 4 + 3] = (unsigned char)(alpha * 255.0f + 0.5f);
     }
 
     /* flip the split diagonal when AO makes it look bent */
-    if (bright[0] + bright[2] >= bright[1] + bright[3]) {
+    if (bright[0] + skyb[0] + bright[2] + skyb[2] >=
+        bright[1] + skyb[1] + bright[3] + skyb[3]) {
         b->idx[b->icount++] = (unsigned short)(base + 0);
         b->idx[b->icount++] = (unsigned short)(base + 1);
         b->idx[b->icount++] = (unsigned short)(base + 2);
@@ -199,27 +206,26 @@ static uint8_t hood_get(const Hood *h, int lx, int y, int lz)
     return c->blocks[wl_chunk_index(lx & 15, y, lz & 15)];
 }
 
-static int hood_top(const Hood *h, int lx, int lz)
-{
-    int dx = (lx + 16) >> 4;
-    int dz = (lz + 16) >> 4;
-    const WlChunk *c = h->ch[dx][dz];
-    if (!c || !c->generated) return 0;
-    return c->top[(lz & 15) * WL_CHUNK_W + (lx & 15)];
-}
-
 static bool hood_opaque(const Hood *h, int lx, int y, int lz)
 {
     return wl_block_is_opaque(hood_get(h, lx, y, lz));
 }
 
-/* skylight approximation: darker the deeper below the column's top */
-static float depth_light(const Hood *h, int lx, int y, int lz)
+/* per-voxel light from the chunk's light array (high nibble sky, low
+ * block). Faces sample the cell in FRONT of the face, like the old
+ * depth approximation did. Unloaded neighbors fail bright. */
+static void hood_light(const Hood *h, int lx, int y, int lz,
+                       float *sky, float *block)
 {
-    int top = hood_top(h, lx, lz);
-    if (y >= top) return 1.0f;
-    float d = 1.0f - (float)(top - y) * 0.09f;
-    return d < 0.28f ? 0.28f : d;
+    if (y < 0) { *sky = 0.0f; *block = 0.0f; return; }
+    if (y >= WL_CHUNK_H) { *sky = 1.0f; *block = 0.0f; return; }
+    int dx = (lx + 16) >> 4;
+    int dz = (lz + 16) >> 4;
+    const WlChunk *c = h->ch[dx][dz];
+    if (!c || !c->generated) { *sky = 1.0f; *block = 0.0f; return; }
+    uint8_t l = c->light[wl_chunk_index(lx & 15, y, lz & 15)];
+    *sky = (float)(l >> 4) * (1.0f / 15.0f);
+    *block = (float)(l & 0x0F) * (1.0f / 15.0f);
 }
 
 static float corner_ao(bool s1, bool s2, bool c)
@@ -242,7 +248,8 @@ static void emit_face(MeshBuf *buf, const Hood *h, int lx, int y, int lz,
     float u0, v0, u1, v1;
     wl_tile_uv(def->tex[dir], &u0, &v0, &u1, &v1);
 
-    float dlight = depth_light(h, nx, ny, nz);
+    float lsky, lblock;
+    hood_light(h, nx, ny, nz, &lsky, &lblock);
     float shade = FACE_SHADE[dir];
 
     /* normal axis + the two tangent axes */
@@ -250,7 +257,7 @@ static void emit_face(MeshBuf *buf, const Hood *h, int lx, int y, int lz,
     int B = (A + 1) % 3;
     int C = (A + 2) % 3;
 
-    float bright[4];
+    float bright[4], skyb[4];
     float pos[4][3];
     for (int k = 0; k < 4; k++) {
         const int8_t *cor = FACE_CORNERS[dir][k];
@@ -269,13 +276,14 @@ static void emit_face(MeshBuf *buf, const Hood *h, int lx, int y, int lz,
                            hood_opaque(h, p2[0], p2[1], p2[2]),
                            hood_opaque(h, p3[0], p3[1], p3[2]));
         }
-        bright[k] = shade * dlight * ao;
+        bright[k] = shade * lblock * ao;
+        skyb[k] = shade * lsky * ao;
         pos[k][0] = (float)(lx + cor[0]);
         pos[k][1] = (float)y + (cor[1] ? top_off : 0.0f);
         pos[k][2] = (float)(lz + cor[2]);
     }
 
-    emit_quad(buf, pos, u0, v0, u1, v1, bright, liquid ? 0.65f : 1.0f);
+    emit_quad(buf, pos, u0, v0, u1, v1, bright, skyb, liquid ? 0.65f : 1.0f);
 }
 
 static void emit_cross(MeshBuf *buf, const Hood *h, int lx, int y, int lz,
@@ -284,8 +292,10 @@ static void emit_cross(MeshBuf *buf, const Hood *h, int lx, int y, int lz,
     float u0, v0, u1, v1;
     wl_tile_uv(def->tex[0], &u0, &v0, &u1, &v1);
 
-    float light = depth_light(h, lx, y, lz);
-    float bright[4] = { light, light, light, light };
+    float lsky, lblock;
+    hood_light(h, lx, y, lz, &lsky, &lblock);
+    float bright[4] = { lblock, lblock, lblock, lblock };
+    float skyb[4] = { lsky, lsky, lsky, lsky };
 
     float pa[4][3] = {
         { (float)lx, (float)y, (float)lz },
@@ -302,19 +312,19 @@ static void emit_cross(MeshBuf *buf, const Hood *h, int lx, int y, int lz,
 
     /* both windings so plants are visible from either side */
     float pr[4][3];
-    emit_quad(buf, pa, u0, v0, u1, v1, bright, 1.0f);
+    emit_quad(buf, pa, u0, v0, u1, v1, bright, skyb, 1.0f);
     pr[0][0] = pa[3][0]; pr[0][1] = pa[3][1]; pr[0][2] = pa[3][2];
     pr[1][0] = pa[2][0]; pr[1][1] = pa[2][1]; pr[1][2] = pa[2][2];
     pr[2][0] = pa[1][0]; pr[2][1] = pa[1][1]; pr[2][2] = pa[1][2];
     pr[3][0] = pa[0][0]; pr[3][1] = pa[0][1]; pr[3][2] = pa[0][2];
-    emit_quad(buf, pr, u0, v0, u1, v1, bright, 1.0f);
+    emit_quad(buf, pr, u0, v0, u1, v1, bright, skyb, 1.0f);
 
-    emit_quad(buf, pb, u0, v0, u1, v1, bright, 1.0f);
+    emit_quad(buf, pb, u0, v0, u1, v1, bright, skyb, 1.0f);
     pr[0][0] = pb[3][0]; pr[0][1] = pb[3][1]; pr[0][2] = pb[3][2];
     pr[1][0] = pb[2][0]; pr[1][1] = pb[2][1]; pr[1][2] = pb[2][2];
     pr[2][0] = pb[1][0]; pr[2][1] = pb[1][1]; pr[2][2] = pb[1][2];
     pr[3][0] = pb[0][0]; pr[3][1] = pb[0][1]; pr[3][2] = pb[0][2];
-    emit_quad(buf, pr, u0, v0, u1, v1, bright, 1.0f);
+    emit_quad(buf, pr, u0, v0, u1, v1, bright, skyb, 1.0f);
 }
 
 /* ------------------------------------------------------------------ */

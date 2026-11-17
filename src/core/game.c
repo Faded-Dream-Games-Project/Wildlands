@@ -5,6 +5,9 @@
 #include "wl/inv_ui.h"
 #include "wl/crafting.h"
 #include "wl/block.h"
+#include "wl/light.h"
+#include "wl/entities.h"
+#include "wl/furnace_ui.h"
 #include "wl/item.h"
 #include "wl/log.h"
 #include "wl/paths.h"
@@ -67,6 +70,8 @@ static void parse_args(WlGame *g, int argc, char **argv)
         } else if (wl_str_eq(argv[i], "--yaw") && i + 1 < argc) {
             g->demo_dir_set = true;
             g->demo_yaw = (float)atof(argv[++i]) * 0.017453293f;
+        } else if (wl_str_eq(argv[i], "--time") && i + 1 < argc) {
+            g->demo_time = atoi(argv[++i]);
         } else if (wl_str_eq(argv[i], "--pitch") && i + 1 < argc) {
             g->demo_dir_set = true;
             float p = (float)atof(argv[++i]) * 0.017453293f;
@@ -130,6 +135,7 @@ static int effective_fps_limit(const WlConfig *c)
 bool wl_game_init(WlGame *g, int argc, char **argv)
 {
     memset(g, 0, sizeof(*g));
+    g->demo_time = -1;
     g->state = WL_STATE_MAIN_MENU;
     g->rebinding_action = -1;
     g->menus.selected = -1;
@@ -491,6 +497,9 @@ bool wl_game_enter_world(WlGame *g, const WlWorldEntry *entry)
         wl_inv_add(&g->player.inv, WL_ITEM_APPLE, 5, 0);
         wl_inv_add(&g->player.inv, WL_ITEM_SWORD_DIAMOND, 1, 900);
         wl_inv_add(&g->player.inv, WL_BLOCK_TORCH, 9, 0);
+        wl_inv_add(&g->player.inv, WL_BLOCK_FURNACE, 1, 0);
+        wl_inv_add(&g->player.inv, WL_ITEM_COAL, 8, 0);
+        wl_inv_add(&g->player.inv, WL_BLOCK_IRON_ORE, 4, 0);
     }
     return true;
 }
@@ -650,6 +659,50 @@ static void run_selftest(WlGame *g)
                        !penetrated && p->pos.x - x0 > 0.5f);
     }
 
+    /* 3b. voxel lighting: torch light in a sealed room, skylight outside */
+    {
+        /* build a sealed 5x4x5 room around a known air pocket */
+        int rx = px + 6, ry = py + 6, rz = pz - 6;
+        for (int dx = 0; dx < 5; dx++)
+            for (int dy = 0; dy < 4; dy++)
+                for (int dz = 0; dz < 5; dz++) {
+                    bool shell = (dx == 0 || dx == 4 || dy == 0 || dy == 3 ||
+                                  dz == 0 || dz == 4);
+                    wl_world_set_block(w, rx + dx, ry + dy, rz + dz,
+                                       shell ? WL_BLOCK_STONE : WL_BLOCK_AIR);
+                }
+        /* force a relight of the affected chunk(s) the way the mesh
+         * step would */
+        WlChunk *lc = wl_world_chunk_at(w, rx >> 4, rz >> 4);
+        if (lc) wl_light_chunk(w, lc);
+
+        int cx = rx + 2, cy = ry + 2, cz = rz + 2; /* room center */
+        selftest_check(g, "sealed room is dark",
+                       wl_light_level(w, cx, cy, cz) == 0);
+
+        wl_world_set_block(w, cx, cy, cz, WL_BLOCK_TORCH);
+        if (lc) wl_light_chunk(w, lc);
+        selftest_check(g, "torch lights its own cell",
+                       wl_light_level(w, cx, cy, cz) >= 13);
+        selftest_check(g, "torch light reaches 3 blocks",
+                       wl_light_level(w, cx, cy, cz - 3) >= 10);
+        /* the block-light channel must not pass the stone wall (the cell
+         * outside is open sky, so only the torch channel is checked) */
+        selftest_check(g, "torch light stops at walls",
+                       wl_light_block(w, rx - 1, cy, cz) == 0);
+
+        wl_world_set_block(w, cx, cy, cz, WL_BLOCK_AIR);
+        if (lc) wl_light_chunk(w, lc);
+        selftest_check(g, "removing torch removes light",
+                       wl_light_level(w, cx, cy, cz) == 0);
+
+        /* skylight above the room, dark below its roof */
+        selftest_check(g, "skylight above terrain",
+                       wl_light_sky(w, rx + 2, WL_CHUNK_H - 1, rz + 2) == 15);
+        selftest_check(g, "no skylight under stone roof",
+                       wl_light_sky(w, cx, cy, cz) == 0);
+    }
+
     /* 4. mining through the real interact path (mouse test seam) */
     p->yaw = 0.0f;
     p->pitch = -1.45f; /* straight down */
@@ -723,6 +776,97 @@ static void run_selftest(WlGame *g)
         selftest_check(g, "session files written", files);
     }
 
+    /* 5b. food: hold right-click with an apple through the real eat path */
+    {
+        wl_inv_init(&p->inv);
+        p->inv.slots[0] = (WlSlot){ WL_ITEM_APPLE, 2, 0 };
+        p->selected_slot = 0;
+        p->hunger = 10.0f;
+        p->eat_timer = 0.0;
+        wl_interact_debug_mouse(false, true, true);
+        for (int i = 0; i < 120; i++)
+            wl_interact_update(p, w, &g->cfg, &g->audio, dt, true);
+        wl_interact_debug_mouse(false, false, false);
+        selftest_check(g, "eating apple restores hunger", p->hunger == 14.0f);
+        selftest_check(g, "eating consumes the item",
+                       p->inv.slots[0].count == 1);
+    }
+
+    /* 6a. entities: spawn, chase, die with drops */
+    {
+        int n = 0;
+        wl_world_entities(w, &n);
+        int before_ents = n;
+        WlEntity *z = wl_world_spawn_entity(w, WL_ENT_ZOMBIE,
+                                            (Vector3){ px + 8.0f, py + 1.0f,
+                                                       pz + 0.5f });
+        selftest_check(g, "zombie spawns", z && z->active);
+
+        /* zombies chase: run updates with the player standing still */
+        float d0 = 8.0f;
+        for (int i = 0; i < 120; i++)
+            wl_world_update_entities(w, p, &g->cfg, &g->audio, dt);
+        float d1 = sqrtf((z->pos.x - p->pos.x) * (z->pos.x - p->pos.x) +
+                         (z->pos.z - p->pos.z) * (z->pos.z - p->pos.z));
+        selftest_check(g, "zombie chases the player", d1 < d0 - 1.0f);
+
+        /* cow death drops beef through the real hurt path */
+        int drops_before = 0;
+        wl_world_drops(w, &drops_before);
+        WlEntity *cow = wl_world_spawn_entity(w, WL_ENT_COW,
+                                              (Vector3){ px + 2.0f, py + 1.0f,
+                                                         pz + 2.0f });
+        selftest_check(g, "cow spawns", cow && cow->active);
+        wl_entity_hurt(w, cow, 100.0f, (Vector3){ 1, 0, 0 }, &g->audio);
+        selftest_check(g, "cow dies when hurt enough", !cow->active);
+        int drops_after = 0;
+        wl_world_drops(w, &drops_after);
+        selftest_check(g, "cow drops loot", drops_after > drops_before);
+        (void)before_ents;
+
+        /* arrow damages the player through the real projectile path */
+        float hp0 = p->health;
+        WlEntity *ar = wl_world_spawn_entity(w, WL_ENT_ARROW,
+                                             (Vector3){ p->pos.x, p->pos.y + 1.0f,
+                                                        p->pos.z });
+        if (ar) {
+            ar->vel = (Vector3){ 0, 0, 0 };
+            wl_world_update_entities(w, p, &g->cfg, &g->audio, dt);
+        }
+        selftest_check(g, "arrow hits and damages the player",
+                       p->health < hp0);
+        if (!p->dead && p->health < hp0) p->health = hp0; /* restore */
+    }
+
+    /* 6b. furnace: smelt iron ore -> ingot with coal, lit/unlit swap,
+     * and persistence */
+    {
+        int fx = px - 4, fy = py + 1, fz = pz - 4;
+        wl_world_set_block(w, fx, fy, fz, WL_BLOCK_FURNACE);
+        WlFurnace *f = wl_world_get_furnace(w, fx, fy, fz, true);
+        selftest_check(g, "furnace record created", f != NULL);
+        if (f) {
+            f->input = (WlSlot){ WL_BLOCK_IRON_ORE, 2, 0 };
+            f->fuel = (WlSlot){ WL_ITEM_COAL, 1, 0 };
+            wl_furnaces_update(w, 5.6f); /* one smelt takes 5s */
+            selftest_check(g, "furnace ignited (lit block)",
+                           wl_world_get_block(w, fx, fy, fz) ==
+                               WL_BLOCK_FURNACE_LIT);
+            selftest_check(g, "iron ore smelted to ingot",
+                           f->output.item == WL_ITEM_IRON_INGOT &&
+                               f->output.count == 1);
+            selftest_check(g, "input consumed", f->input.count == 1);
+            wl_furnaces_update(w, 40.0f); /* burn the coal out */
+            selftest_check(g, "furnace unlit when out of fuel",
+                           wl_world_get_block(w, fx, fy, fz) ==
+                               WL_BLOCK_FURNACE);
+        }
+        /* cooked-meat recipe lookup */
+        selftest_check(g, "raw beef smelts to steak",
+                       wl_furnace_smelt_result(WL_ITEM_BEEF_RAW) ==
+                           WL_ITEM_BEEF_COOKED);
+    }
+
     /* 7. death drops the whole inventory into the world */
     wl_inv_init(&p->inv); /* deterministic: earlier steps mined blocks */
     wl_inv_add(&p->inv, WL_BLOCK_LOG, 12, 0);
@@ -732,11 +876,14 @@ static void run_selftest(WlGame *g)
     wl_player_damage(p, 1000.0f, &g->audio, g->cfg.difficulty);
     selftest_check(g, "player dies", p->dead);
     g->cfg.difficulty = save_difficulty;
+    int drops_before_death = 0;
+    wl_world_drops(w, &drops_before_death); /* earlier tests may have left loot */
     bool dropped = wl_game_drop_inventory(g);
     selftest_check(g, "death drop reports complete", dropped);
     int drops = 0;
     wl_world_drops(w, &drops);
-    selftest_check(g, "death spawned 2 drop stacks", drops == 2);
+    selftest_check(g, "death spawned 2 drop stacks",
+                   drops - drops_before_death == 2);
     selftest_check(g, "inventory emptied on death",
                    wl_inv_count(&p->inv, WL_BLOCK_LOG) == 0 &&
                    wl_inv_count(&p->inv, WL_ITEM_APPLE) == 0);
@@ -1258,6 +1405,11 @@ static void loading_frame(WlGame *g)
         if (g->player.pos.y < (float)py) g->player.pos.y = (float)py + 0.01f;
 
         g->state = WL_STATE_PLAYING;
+        if (g->demo_time >= 0 && g->state == WL_STATE_PLAYING) {
+            /* test automation: jump to a time of day (13300 = night) */
+            wl_world_set_time(g->world, (uint32_t)g->demo_time);
+            g->demo_time = -1;
+        }
         if (g->demo_dir_set) { /* test automation: fixed camera direction */
             g->player.yaw = g->demo_yaw;
             g->player.pitch = g->demo_pitch;
@@ -1317,7 +1469,8 @@ static void play_frame(WlGame *g)
     WlPlayer *p = &g->player;
 
     bool overlay_open = (g->overlay == WL_OVERLAY_INVENTORY ||
-                         g->overlay == WL_OVERLAY_CRAFTING);
+                         g->overlay == WL_OVERLAY_CRAFTING ||
+                         g->overlay == WL_OVERLAY_FURNACE);
 
     /* Pausing must NOT return early: raylib polls input inside
      * EndDrawing(), so a frame that skips it never sees the key release
@@ -1337,7 +1490,8 @@ static void play_frame(WlGame *g)
     /* global keys */
     if (!pause_now && wl_game_key_pressed(g, g->keys.key[WL_ACT_PAUSE])) {
         if (overlay_open) {
-            wl_inv_ui_close(g);
+            if (g->overlay == WL_OVERLAY_FURNACE) g->overlay = WL_OVERLAY_NONE;
+            else wl_inv_ui_close(g);
             DisableCursor();
         } else if (!p->dead) {
             g->state = WL_STATE_PAUSED;
@@ -1347,7 +1501,8 @@ static void play_frame(WlGame *g)
     }
     if (!pause_now && IsKeyPressed(g->keys.key[WL_ACT_INVENTORY]) && !p->dead) {
         if (overlay_open) {
-            wl_inv_ui_close(g);
+            if (g->overlay == WL_OVERLAY_FURNACE) g->overlay = WL_OVERLAY_NONE;
+            else wl_inv_ui_close(g);
             DisableCursor();
         } else {
             wl_inv_open_craft(&p->inv, 2);
@@ -1388,6 +1543,28 @@ static void play_frame(WlGame *g)
             g->item_toast = 1.6f;
             const WlItem *it = wl_item_get(p->inv.slots[p->selected_slot].item);
             wl_scpy(g->item_toast_name, it ? it->display : "", sizeof(g->item_toast_name));
+        }
+
+        /* Q: drop the selected stack into the world */
+        if (wl_game_key_pressed(g, g->keys.key[WL_ACT_DROP])) {
+            WlSlot *slot = &p->inv.slots[p->selected_slot];
+            if (slot->item != WL_ITEM_NONE) {
+                Vector3 eye = wl_player_eye(p);
+                Vector3 look = wl_player_look_dir(p);
+                Vector3 pos = { eye.x + look.x * 0.9f, eye.y - 0.25f,
+                                eye.z + look.z * 0.9f };
+                Vector3 vel = { look.x * 5.0f, 1.6f + look.y * 4.0f, look.z * 5.0f };
+                if (wl_world_add_drop_thrown(g->world, slot->item, slot->count,
+                                             slot->dur, pos, vel, 1.3f)) {
+                    const WlItem *it = wl_item_get(slot->item);
+                    WL_LOGD("dropped %d x %s", (int)slot->count,
+                            it ? it->name : "?");
+                    slot->item = WL_ITEM_NONE;
+                    slot->count = 0;
+                    slot->dur = 0;
+                    wl_audio_play(&g->audio, WL_SND_CLICK);
+                }
+            }
         }
 
         Vector2 md = GetMouseDelta();
@@ -1439,11 +1616,17 @@ static void play_frame(WlGame *g)
                 wl_inv_open_craft(&p->inv, 3);
                 g->overlay = WL_OVERLAY_CRAFTING;
                 EnableCursor();
+            } else if (act == WL_INTERACT_OPEN_FURNACE && input_active) {
+                WlTarget ft = wl_interact_query(g->world, p);
+                if (ft.valid)
+                    wl_furnace_ui_open(g, ft.x, ft.y, ft.z);
             }
         }
         wl_world_advance_time(g->world, dt);
         wl_world_update(g->world, p->pos.x, p->pos.z);
         wl_world_update_drops(g->world, p, dt);
+        wl_world_update_entities(g->world, p, &g->cfg, &g->audio, dt);
+        wl_furnaces_update(g->world, dt);
         wl_audio_update(&g->audio, dt, wl_world_time(g->world), true);
 
         /* autosave */
@@ -1462,9 +1645,15 @@ static void play_frame(WlGame *g)
     wl_renderer_draw_world(&g->rend, g->world, &g->cfg, wl_world_time(g->world),
                            p->head_in_water);
     wl_renderer_draw_drops(&g->rend, g->world, wl_world_time(g->world));
-    if (!p->dead) wl_renderer_draw_held_item(&g->rend, p);
+    wl_renderer_draw_entities(&g->rend, g->world);
+    if (p->break_progress > 0.0)
+        wl_renderer_draw_break_overlay(&g->rend, g->world,
+                                       p->break_x, p->break_y, p->break_z,
+                                       (float)p->break_progress);
+    if (!p->dead) wl_renderer_draw_held_item(&g->rend, g->world, p);
     wl_hud_draw(g);
     wl_inv_ui_draw(g);
+    wl_furnace_ui_draw(g);
     uitest_maybe_shot(g);
     EndDrawing();
 
@@ -1499,7 +1688,8 @@ static void paused_frame(WlGame *g)
     wl_renderer_draw_world(&g->rend, g->world, &g->cfg, wl_world_time(g->world),
                            g->player.head_in_water);
     wl_renderer_draw_drops(&g->rend, g->world, wl_world_time(g->world));
-    if (!g->player.dead) wl_renderer_draw_held_item(&g->rend, &g->player);
+    wl_renderer_draw_entities(&g->rend, g->world);
+    if (!g->player.dead) wl_renderer_draw_held_item(&g->rend, g->world, &g->player);
     wl_hud_draw(g);
     wl_menu_pause(g);
     uitest_maybe_shot(g);

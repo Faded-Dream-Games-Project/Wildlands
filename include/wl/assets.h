@@ -24,6 +24,7 @@ typedef enum {
     WL_TEX_ENV_SUN,
     WL_TEX_ENV_MOON,
     WL_TEX_ENV_CLOUDS,
+    WL_TEX_ENTITIES,    /* mob/animal model skins (see tools/gen_assets.py) */
     WL_TEX_COUNT
 } WlTexId;
 
@@ -44,6 +45,9 @@ typedef enum {
     WL_SND_HURT,
     WL_SND_EAT,
     WL_SND_SPLASH,
+    WL_SND_MOB_HURT,
+    WL_SND_BOW,
+    WL_SND_PICKUP,
     WL_SND_COUNT
 } WlSndId;
 
@@ -56,6 +60,7 @@ typedef enum {
 
 typedef enum {
     WL_SHADER_CHUNK = 0, /* used for chunks, water, clouds */
+    WL_SHADER_ENTITY,    /* mobs, drops, held items (local light) */
     WL_SHADER_COUNT
 } WlShaderId;
 
@@ -66,6 +71,14 @@ typedef struct {
     int light_scale;
     int uv_offset;
 } WlChunkShaderLocs;
+
+/* custom uniform locations of the entity shader */
+typedef struct {
+    int entity_light;
+    int hurt_flash;
+    int fog_color;
+    int fog_range;
+} WlEntityShaderLocs;
 
 typedef struct WlAssets WlAssets;
 
@@ -84,6 +97,7 @@ Texture2D wl_assets_tex(WlAssets *a, WlTexId id);
 Font wl_assets_font(WlAssets *a, WlFontId id);
 Shader wl_assets_shader(WlAssets *a, WlShaderId id);
 const WlChunkShaderLocs *wl_assets_chunk_locs(WlAssets *a);
+const WlEntityShaderLocs *wl_assets_entity_locs(WlAssets *a);
 Sound wl_assets_snd(WlAssets *a, WlSndId id);
 bool wl_assets_snd_ok(WlAssets *a, WlSndId id);
 Music wl_assets_music(WlAssets *a, WlMusId id);

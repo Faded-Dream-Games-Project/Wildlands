@@ -31,6 +31,7 @@ typedef enum {
     WL_OVERLAY_INVENTORY, /* 2x2 pocket crafting */
     WL_OVERLAY_CRAFTING,  /* 3x3 crafting table  */
     WL_OVERLAY_DEATH,
+    WL_OVERLAY_FURNACE,  /* furnace input/fuel/output screen */
 } WlOverlay;
 
 #define WL_MENUS_MAX_WORLDS 64
@@ -118,6 +119,7 @@ typedef struct WlGame {
     bool demo_menu;
     char demo_start_menu[16];   /* "" | world select | create | settings */
     int demo_overlay;           /* 0 none, 2 inventory, 3 crafting table */
+    int demo_time;              /* >= 0: jump world time at entry (--time) */
     /* demo camera direction (--yaw/--pitch degrees, applied at world entry) */
     bool demo_dir_set;
     float demo_yaw, demo_pitch;

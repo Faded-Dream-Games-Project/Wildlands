@@ -183,6 +183,48 @@ void wl_items_init(void)
     reg_tool(WL_ITEM_SWORD_DIAMOND,  "diamond_sword", "Diamond Sword",
              TILE_ICON_SWORD_DIAMOND,  WL_TOOL_SWORD, 1562);
 
+    reg(WL_ITEM_LEATHER, (WlItem){
+        .name = "leather", .display = "Leather", .tile = TILE_ICON_LEATHER, .max_stack = 64 });
+    reg(WL_ITEM_FEATHER, (WlItem){
+        .name = "feather", .display = "Feather", .tile = TILE_ICON_FEATHER, .max_stack = 64 });
+    reg(WL_ITEM_WOOL, (WlItem){
+        .name = "wool", .display = "Wool", .tile = TILE_ICON_WOOL, .max_stack = 64 });
+    reg(WL_ITEM_IRON_INGOT, (WlItem){
+        .name = "iron_ingot", .display = "Iron Ingot", .tile = TILE_ICON_IRON_INGOT, .max_stack = 64 });
+    reg(WL_ITEM_BEEF_RAW, (WlItem){
+        .name = "beef_raw", .display = "Raw Beef", .tile = TILE_ICON_BEEF_RAW,
+        .food = 3, .max_stack = 64 });
+    reg(WL_ITEM_BEEF_COOKED, (WlItem){
+        .name = "beef_cooked", .display = "Steak", .tile = TILE_ICON_BEEF_COOKED,
+        .food = 8, .max_stack = 64 });
+    reg(WL_ITEM_PORK_RAW, (WlItem){
+        .name = "pork_raw", .display = "Raw Porkchop", .tile = TILE_ICON_PORK_RAW,
+        .food = 3, .max_stack = 64 });
+    reg(WL_ITEM_PORK_COOKED, (WlItem){
+        .name = "pork_cooked", .display = "Cooked Porkchop", .tile = TILE_ICON_PORK_COOKED,
+        .food = 8, .max_stack = 64 });
+    reg(WL_ITEM_CHICKEN_RAW, (WlItem){
+        .name = "chicken_raw", .display = "Raw Chicken", .tile = TILE_ICON_CHICKEN_RAW,
+        .food = 2, .max_stack = 64 });
+    reg(WL_ITEM_CHICKEN_COOKED, (WlItem){
+        .name = "chicken_cooked", .display = "Cooked Chicken", .tile = TILE_ICON_CHICKEN_COOKED,
+        .food = 6, .max_stack = 64 });
+    reg(WL_ITEM_MUTTON_RAW, (WlItem){
+        .name = "mutton_raw", .display = "Raw Mutton", .tile = TILE_ICON_MUTTON_RAW,
+        .food = 2, .max_stack = 64 });
+    reg(WL_ITEM_MUTTON_COOKED, (WlItem){
+        .name = "mutton_cooked", .display = "Cooked Mutton", .tile = TILE_ICON_MUTTON_COOKED,
+        .food = 6, .max_stack = 64 });
+    reg(WL_ITEM_ARROW, (WlItem){
+        .name = "arrow", .display = "Arrow", .tile = TILE_ICON_ARROW, .max_stack = 64 });
+    reg(WL_ITEM_ROTTEN_FLESH, (WlItem){
+        .name = "rotten_flesh", .display = "Rotten Flesh", .tile = TILE_ICON_ROTTEN_FLESH,
+        .food = 2, .max_stack = 64 });
+    reg(WL_ITEM_STRING, (WlItem){
+        .name = "string", .display = "String", .tile = TILE_ICON_STRING, .max_stack = 64 });
+    reg(WL_ITEM_BONE, (WlItem){
+        .name = "bone", .display = "Bone", .tile = TILE_ICON_BONE, .max_stack = 64 });
+
     g_items_initialized = true;
     WL_LOGI("item registry: %d entries", g_item_count);
 }

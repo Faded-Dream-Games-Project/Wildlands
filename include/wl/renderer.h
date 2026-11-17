@@ -40,6 +40,15 @@ typedef struct WlRenderer {
     Mesh item_mesh[256];
     bool item_mesh_ok[256];
 
+    /* entities: mob part meshes (unit cubes, one per entity-atlas tile)
+     * and the entity/item materials (entity shader + local light) */
+    Mesh ent_part_mesh[32];
+    bool ent_part_ok[32];
+    Material mat_ent;    /* entities.png + entity shader */
+    Material mat_item;   /* block atlas + entity shader (drops, held) */
+    MaterialMap ent_maps[WL_MATERIAL_MAPS];
+    MaterialMap item_maps[WL_MATERIAL_MAPS];
+
     int drawn_chunks;
     int visible_chunks; /* frustum-visible (drawn + fog-skipped) */
     long drawn_tris;
@@ -75,7 +84,16 @@ void wl_renderer_draw_drops(WlRenderer *r, struct WlWorld *w, uint32_t ticks);
 /* First-person held item for the selected hotbar slot: a small block
  * cube or item sprite in camera space, depth-cleared so terrain never
  * covers it. Call after the world + drops, still inside BeginDrawing(). */
-void wl_renderer_draw_held_item(WlRenderer *r, const struct WlPlayer *p);
+void wl_renderer_draw_held_item(WlRenderer *r, struct WlWorld *w,
+                                const struct WlPlayer *p);
+
+/* Mobs, animals and arrows: animated box models skinned from the entity
+ * atlas, lit by the voxel light at each entity's position. */
+void wl_renderer_draw_entities(WlRenderer *r, struct WlWorld *w);
+
+/* Progressive breaking-stage overlay on the targeted block. */
+void wl_renderer_draw_break_overlay(WlRenderer *r, struct WlWorld *w,
+                                    int x, int y, int z, float progress);
 
 Vector3 wl_renderer_cam_pos(const WlRenderer *r);
 /* Current light multiplier for UI effects (darken HUD at night). */

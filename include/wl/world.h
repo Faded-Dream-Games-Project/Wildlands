@@ -24,6 +24,18 @@ typedef struct {
     int gamemode;
 } WlWorldParams;
 
+/* Furnace block entity: contents + smelting state, keyed by position. */
+typedef struct WlFurnace {
+    bool active;
+    int x, y, z;           /* world position (the key) */
+    WlSlot input, fuel, output;
+    float burn_left;       /* seconds of fuel left in the fire */
+    float burn_total;      /* burn time of the current fuel item */
+    float progress;        /* 0..1 toward one smelt result */
+} WlFurnace;
+
+#define WL_FURNACES_MAX 64
+
 /* A stack of items lying in the world (death drops). */
 typedef struct WlDrop {
     WlItemId item;   /* what to pick up                      */
@@ -82,6 +94,8 @@ WlChunk *const *wl_world_chunk_list(WlWorld *w, int *count);
 
 /* --- time of day --- */
 uint32_t wl_world_time(const WlWorld *w);
+/* Jumps the time of day (test automation / debugging). */
+void wl_world_set_time(WlWorld *w, uint32_t ticks);
 void     wl_world_advance_time(WlWorld *w, float dt);
 
 /* --- persistence --- */
@@ -92,11 +106,37 @@ bool wl_world_save_modified(WlWorld *w);
  * Returns false when no save exists (fresh generation stays). */
 bool wl_world_load_saved_chunk(WlWorld *w, WlChunk *c);
 
+/* --- furnaces --- */
+/* Returns the furnace at the block position, creating an empty one when
+ * create is true. NULL when the store is full or not found. */
+WlFurnace *wl_world_get_furnace(WlWorld *w, int x, int y, int z, bool create);
+/* Removes the record and returns its three stacks by value (block broken). */
+bool wl_world_remove_furnace(WlWorld *w, int x, int y, int z,
+                             WlSlot out_stacks[3]);
+/* Dense list (valid until the next mutation). */
+const WlFurnace *wl_world_furnaces(const WlWorld *w, int *count);
+/* Same, mutable — used by the smelting tick. */
+WlFurnace *wl_world_furnaces_mutable(WlWorld *w, int *count);
+/* Ticks smelting for every furnace (call once per frame while playing). */
+void wl_furnaces_update(WlWorld *w, float dt);
+/* Smelt result for an input item (WL_ITEM_NONE when not smeltable). */
+WlItemId wl_furnace_smelt_result(WlItemId input);
+/* Burn time in seconds for a fuel item (0 = not a fuel). */
+float wl_furnace_fuel_time(WlItemId fuel);
+/* Persistence: furnaces.dat. */
+bool wl_world_save_furnaces(const WlWorld *w);
+void wl_world_load_furnaces(WlWorld *w);
+
 /* --- dropped items (death drops) --- */
 /* Spawns one drop entity with a small random throw velocity. Returns
  * false when the drop list is full (caller retries later). */
 bool wl_world_add_drop(WlWorld *w, WlItemId item, uint8_t count, uint16_t dur,
                        Vector3 pos);
+/* Same, but with an explicit throw velocity and pickup delay (Q-drop).
+ * delay <= 0 uses the default 0.5s. */
+bool wl_world_add_drop_thrown(WlWorld *w, WlItemId item, uint8_t count,
+                              uint16_t dur, Vector3 pos, Vector3 vel,
+                              float pickup_delay);
 /* Physics + pickup against the player. `pickup` may be NULL to only
  * simulate. Adds what fits back into the inventory and keeps the rest in
  * the world. */

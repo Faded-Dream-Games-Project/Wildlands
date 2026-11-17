@@ -27,6 +27,24 @@ identity. Build, explore, survive, and create.
   your whole inventory into the world as item entities (they fall, bob,
   persist in the save and can be picked back up); the selected hotbar
   item renders in your hand.
+- **Mobs & animals** — zombies chase and melee, skeletons keep their
+  distance and fire arrows (with line-of-sight checks and cooldowns),
+  spiders are fast and hostile in the dark. Cows, pigs, sheep and
+  chickens wander the plains and drop meat, leather, feathers and wool.
+  Hostiles spawn at night and in dark caves, animals on sunlit grass;
+  populations scale with difficulty and despawn when far away. All of
+  them persist in the save.
+- **Voxel lighting** — per-voxel skylight and block light with flood
+  propagation: caves are dark, night is dark, torches and lit furnaces
+  cast real light onto the world geometry that updates when blocks
+  change. Held torches glow in your hand.
+- **Furnace & smelting** — craft a furnace from cobblestone, feed it
+  coal (or wood), and smelt iron ore into ingots, raw meat into cooked
+  food, sand into glass. The furnace shows fuel and progress bars,
+  swaps to a lit block while burning and keeps its contents in the save.
+- **Feel** — progressive block-breaking cracks, Q to drop the held
+  stack, hunger drains with sprinting and regenerates health when well
+  fed, starvation hurts, footsteps and impact sounds per material.
 - **Pause menu** — Esc pauses (never quits): the world freezes behind a
   dimmed panel with Resume Game, Options (returns to the pause menu),
   Save and Quit to Title, and Quit to Desktop. Failed saves are reported
@@ -55,7 +73,7 @@ make            # release build  -> bin/wildlands
 make debug      # debug build    -> bin/wildlands_debug
 make asan       # AddressSanitizer build
 make run        # build + run (auto-starts Xvfb when no display is present)
-make test       # build + run the unit tests (210 checks)
+make test       # build + run the unit tests (218 checks)
 make selftest   # build + run the in-game runtime self test
 make mods       # build the example mod (mods/example_mod/mod.so)
 make assets     # regenerate original assets (dev only, needs Python+Pillow)
@@ -80,10 +98,10 @@ the full pause flow (Esc pause/resume, frozen simulation, Options
 round-trip, Save and Quit to Title, Quit to Desktop) end to end.
 
 `tools/input_test.sh` drives the real game under Xvfb with genuine X11
-key/mouse events (`tools/xsend.c`), verifying that Esc/E open their menus
-and keep them open, the camera does not jump across menu transitions,
-icons render, the held item follows hotbar selection, and mined blocks
-appear in the hotbar.
+key/mouse events (`tools/xsend.c`): menus open and stay open, the camera
+does not jump, icons and held items follow hotbar selection, mined blocks
+appear in the hotbar, a placed torch illuminates a night scene, the
+furnace UI opens on right-click, and Q drops the held stack (9 checks).
 
 `tools/repro_render.sh` and `tools/verify_battery.sh` reproduce and
 regression-test the render pipeline against camera-motion artifacts

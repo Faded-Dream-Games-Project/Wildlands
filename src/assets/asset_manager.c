@@ -34,6 +34,7 @@ struct WlAssets {
     bool fonts_ok[WL_FONT_COUNT];
     Shader shaders[WL_SHADER_COUNT];
     WlChunkShaderLocs chunk_locs;
+    WlEntityShaderLocs entity_locs;
     Sound snds[WL_SND_COUNT];
     bool snds_ok[WL_SND_COUNT];
     Music music[WL_MUS_COUNT];
@@ -127,6 +128,7 @@ WlAssets *wl_assets_create(const char *root)
         "environment/sun.png",
         "environment/moon.png",
         "environment/clouds.png",
+        "textures/entities.png",
     };
     for (int i = 1; i < (int)WL_TEX_COUNT; i++)
         a->tex[i] = load_texture_rel(a, tex_files[i], &a->tex_ok[i]);
@@ -169,11 +171,35 @@ WlAssets *wl_assets_create(const char *root)
         a->chunk_locs.uv_offset = GetShaderLocation(s, "uvOffset");
     }
 
+    /* entity shader: mobs, dropped items, held items */
+    bool e1 = build_path(vs330, sizeof(vs330), a, "shaders/entity_330.vs");
+    bool e2 = build_path(fs330, sizeof(fs330), a, "shaders/entity_330.fs");
+    bool e3 = build_path(vsc, sizeof(vsc), a, "shaders/entity_compat.vs");
+    bool e4 = build_path(fsc, sizeof(fsc), a, "shaders/entity_compat.fs");
+    if (e1 && e2) a->shaders[WL_SHADER_ENTITY] = LoadShader(vs330, fs330);
+    if (a->shaders[WL_SHADER_ENTITY].id == 0 && e3 && e4) {
+        WL_LOGW("GLSL 330 entity shader failed; falling back to compat");
+        a->shaders[WL_SHADER_ENTITY] = LoadShader(vsc, fsc);
+    }
+    if (a->shaders[WL_SHADER_ENTITY].id == 0) {
+        WL_LOGE("entity shaders failed to load; entities use the default shader");
+        a->shaders[WL_SHADER_ENTITY] = LoadShader(NULL, NULL);
+    } else {
+        Shader s = a->shaders[WL_SHADER_ENTITY];
+        a->entity_locs.entity_light = GetShaderLocation(s, "entityLight");
+        a->entity_locs.hurt_flash = GetShaderLocation(s, "hurtFlash");
+        a->entity_locs.fog_color = GetShaderLocation(s, "fogColor");
+        a->entity_locs.fog_range = GetShaderLocation(s, "fogRange");
+    }
+
     static const char *snd_files[WL_SND_COUNT] = {
         "audio/click.wav", "audio/place.wav", "audio/break_stone.wav",
         "audio/break_dirt.wav", "audio/break_wood.wav", "audio/step_grass.wav",
         "audio/step_stone.wav", "audio/hurt.wav", "audio/eat.wav",
         "audio/splash.wav",
+        "audio/mob_hurt.wav",
+        "audio/bow.wav",
+        "audio/pickup.wav",
     };
     for (int i = 0; i < (int)WL_SND_COUNT; i++) {
         char path[WL_PATH_MAX];
@@ -377,6 +403,11 @@ Shader wl_assets_shader(WlAssets *a, WlShaderId id)
 const WlChunkShaderLocs *wl_assets_chunk_locs(WlAssets *a)
 {
     return a ? &a->chunk_locs : NULL;
+}
+
+const WlEntityShaderLocs *wl_assets_entity_locs(WlAssets *a)
+{
+    return a ? &a->entity_locs : NULL;
 }
 
 Sound wl_assets_snd(WlAssets *a, WlSndId id)

@@ -1,0 +1,24 @@
+# entity atlas tile ids (16x16 grid)
+zombie_head = 0
+zombie_body = 1
+zombie_limb = 2
+skel_head = 3
+skel_body = 4
+skel_limb = 5
+spider_body = 6
+spider_head = 7
+spider_leg = 8
+cow_body = 9
+cow_head = 10
+cow_leg = 11
+pig_body = 12
+pig_head = 13
+pig_leg = 14
+chicken_body = 15
+chicken_head = 16
+chicken_leg = 17
+chicken_wing = 18
+sheep_body = 19
+sheep_head = 20
+sheep_leg = 21
+arrow = 22

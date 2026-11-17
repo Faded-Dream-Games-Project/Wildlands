@@ -1,5 +1,7 @@
 /* interact.c — raycasting, mining, placing, eating, pick-block. */
 #include "wl/interact.h"
+#include "wl/entities.h"
+#include "wl/world.h"
 #include "wl/player.h"
 #include "wl/world.h"
 #include "wl/block.h"
@@ -164,6 +166,19 @@ static void break_block(WlPlayer *p, WlWorld *w, const WlTarget *t,
     const WlBlock *def = wl_block_get(t->id);
     if (!def) return;
 
+    /* furnace contents pop out before the block goes away */
+    if (t->id == WL_BLOCK_FURNACE || t->id == WL_BLOCK_FURNACE_LIT) {
+        WlSlot stacks[3];
+        if (wl_world_remove_furnace(w, t->x, t->y, t->z, stacks)) {
+            for (int i = 0; i < 3; i++)
+                if (stacks[i].item != WL_ITEM_NONE)
+                    wl_world_add_drop(w, stacks[i].item, stacks[i].count,
+                                      stacks[i].dur,
+                                      (Vector3){ t->x + 0.5f, t->y + 0.5f,
+                                                 t->z + 0.5f });
+        }
+    }
+
     WlSlot *slot = &p->inv.slots[p->selected_slot];
     wl_audio_play(audio, break_sound_for(def));
 
@@ -192,14 +207,22 @@ static bool try_place(WlPlayer *p, WlWorld *w, const WlTarget *t,
     const WlItem *item = wl_item_get(slot->item);
     if (!item || !item->is_block) return false;
 
-    if (!cell_replaceable(w, t->px, t->py, t->pz)) return false;
+    /* when the crosshair is on a replaceable plant (tall grass), place
+     * INTO its cell instead of the adjacent one — the adjacent cell sits
+     * on top of the plant and has no solid floor, which used to eat the
+     * placement on meadows */
+    int px = t->px, py = t->py, pz = t->pz;
+    if (cell_replaceable(w, t->x, t->y, t->z)) {
+        px = t->x; py = t->y; pz = t->z;
+    }
+    if (!cell_replaceable(w, px, py, pz)) return false;
 
     const WlBlock *def = wl_block_get(item->block_id);
     if (!def) return false;
 
     if (def->shape == WL_RENDER_CROSS) {
         /* plants need a solid block below (flowers only on grass/dirt) */
-        uint8_t below = wl_world_get_block(w, t->px, t->py - 1, t->pz);
+        uint8_t below = wl_world_get_block(w, px, py - 1, pz);
         if (!wl_block_is_solid(below)) return false;
         if (item->block_id == WL_BLOCK_FLOWER_RED ||
             item->block_id == WL_BLOCK_FLOWER_YELLOW) {
@@ -207,11 +230,11 @@ static bool try_place(WlPlayer *p, WlWorld *w, const WlTarget *t,
                 below != WL_BLOCK_SNOW_GRASS)
                 return false;
         }
-    } else if (def->solid && block_intersects_player(p, t->px, t->py, t->pz)) {
+    } else if (def->solid && block_intersects_player(p, px, py, pz)) {
         return false;
     }
 
-    if (!wl_world_set_block(w, t->px, t->py, t->pz, item->block_id)) return false;
+    if (!wl_world_set_block(w, px, py, pz, item->block_id)) return false;
 
     if (gamemode == WL_WORLD_GAMEMODE_SURVIVAL)
         wl_inv_consume_slot(&p->inv, p->selected_slot);
@@ -266,6 +289,28 @@ int wl_interact_update(WlPlayer *p, WlWorld *w, const WlConfig *cfg,
     }
     p->eat_timer = 0.0;
 
+    /* ---- melee: an entity under the crosshair takes priority over
+     * mining; retriggered on a fresh press or every cooldown cycle ---- */
+    if (mouse_left && p->break_cooldown <= 0.0) {
+        Vector3 eye = wl_player_eye(p);
+        Vector3 look = wl_player_look_dir(p);
+        float hit_d = 0.0f;
+        WlEntity *target = wl_entity_ray_hit(w, eye, look, 3.6f, &hit_d);
+        if (target) {
+            float dmg = 1.0f; /* bare hands */
+            if (held && held->tool == WL_TOOL_SWORD)
+                dmg = 3.0f + (float)held->tool_tier; /* wood 4 .. diamond 7 */
+            else if (held && held->tool != WL_TOOL_NONE)
+                dmg = 2.0f + (float)held->tool_tier * 0.5f;
+            wl_entity_hurt(w, target, dmg, look, audio);
+            if (held && held->durability > 0) damage_tool(p, slot, audio);
+            p->break_cooldown = 0.45;
+            p->break_progress = 0.0;
+            p->exhaustion += 0.1f;
+            return WL_INTERACT_NONE;
+        }
+    }
+
     /* ---- breaking ---- */
     if (mouse_left && t.valid) {
         const WlBlock *def = wl_block_get(t.id);
@@ -309,6 +354,11 @@ int wl_interact_update(WlPlayer *p, WlWorld *w, const WlConfig *cfg,
         /* crafting table opens the 3x3 grid unless sneaking */
         if (t.id == WL_BLOCK_CRAFTING_TABLE && !p->sneaking)
             return WL_INTERACT_OPEN_CRAFT;
+
+        /* furnaces open their own screen (sneaking still places) */
+        if ((t.id == WL_BLOCK_FURNACE || t.id == WL_BLOCK_FURNACE_LIT) &&
+            !p->sneaking)
+            return WL_INTERACT_OPEN_FURNACE;
 
         if (p->place_cooldown <= 0.0) {
             if (try_place(p, w, &t, audio, gamemode))

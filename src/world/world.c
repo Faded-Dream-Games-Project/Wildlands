@@ -7,6 +7,8 @@
  * (budgeted) generation in wl_world_update. */
 #include "wl/world.h"
 #include "wl/mesher.h"
+#include "wl/light.h"
+#include "wl/entities.h"
 #include "wl/world_store.h"
 #include "wl/block.h"
 #include "wl/player.h"
@@ -67,6 +69,15 @@ struct WlWorld {
     /* dropped items (compacted: active drops live at [0, drop_count)) */
     WlDrop drops[WL_DROPS_MAX];
     int drop_count;
+
+    /* living entities (compacted like drops) */
+    WlEntity ents[WL_ENTITIES_MAX];
+    int ent_count;
+    uint32_t next_ent_id;
+
+    /* furnace block entities (keyed by position, holes are inactive) */
+    WlFurnace furnaces[WL_FURNACES_MAX];
+    int furnace_count;
 
     /* generation worker */
     bool thread_ok;
@@ -235,15 +246,20 @@ static void apply_gen_result(WlWorld *w, const WlGenResult *r)
     c->generated = true;
     c->queued_gen = false;
     c->dirty_mesh = true;
+    c->light_dirty = true;
 
-    /* border faces of already-meshed neighbors must be rebuilt */
+    /* border faces of already-meshed neighbors must be rebuilt; their
+     * light imports change too, so they relight as well */
     static const int8_t dirs[8][2] = {
         { -1, 0 }, { 1, 0 }, { 0, -1 }, { 0, 1 },
         { -1, -1 }, { 1, -1 }, { -1, 1 }, { 1, 1 }
     };
     for (int i = 0; i < 8; i++) {
         WlChunk *n = wl_world_chunk_at(w, c->cx + dirs[i][0], c->cz + dirs[i][1]);
-        if (n && n->generated) n->dirty_mesh = true;
+        if (n && n->generated) {
+            n->dirty_mesh = true;
+            n->light_dirty = true;
+        }
     }
 }
 
@@ -292,6 +308,8 @@ WlWorld *wl_world_create(const WlWorldParams *params, const char *save_dir)
     w->render_distance = 8;
     wl_scpy(w->save_dir, save_dir ? save_dir : "", sizeof(w->save_dir));
     wl_world_load_drops(w); /* existing death drops, if any */
+    wl_world_load_entities(w);
+    wl_world_load_furnaces(w);
 
     pthread_mutex_init(&w->lock, NULL);
     pthread_cond_init(&w->cv_work, NULL);
@@ -379,22 +397,23 @@ bool wl_world_set_block(WlWorld *w, int x, int y, int z, uint8_t id)
 
     c->modified = true;
     c->dirty_mesh = true;
+    c->light_dirty = true; /* torch placed/broken, skylight column changed */
 
     if (lx == 0) {
         WlChunk *n = wl_world_chunk_at(w, cx - 1, cz);
-        if (n) n->dirty_mesh = true;
+        if (n) { n->dirty_mesh = true; n->light_dirty = true; }
     }
     if (lx == 15) {
         WlChunk *n = wl_world_chunk_at(w, cx + 1, cz);
-        if (n) n->dirty_mesh = true;
+        if (n) { n->dirty_mesh = true; n->light_dirty = true; }
     }
     if (lz == 0) {
         WlChunk *n = wl_world_chunk_at(w, cx, cz - 1);
-        if (n) n->dirty_mesh = true;
+        if (n) { n->dirty_mesh = true; n->light_dirty = true; }
     }
     if (lz == 15) {
         WlChunk *n = wl_world_chunk_at(w, cx, cz + 1);
-        if (n) n->dirty_mesh = true;
+        if (n) { n->dirty_mesh = true; n->light_dirty = true; }
     }
     return true;
 }
@@ -413,6 +432,13 @@ WlChunk *const *wl_world_chunk_list(WlWorld *w, int *count)
 }
 
 uint32_t wl_world_time(const WlWorld *w) { return w ? w->time_ticks : 0; }
+
+void wl_world_set_time(WlWorld *w, uint32_t ticks)
+{
+    if (!w) return;
+    w->time_ticks = ticks % WL_DAY_TICKS;
+    w->time_frac = 0.0f;
+}
 
 void wl_world_advance_time(WlWorld *w, float dt)
 {
@@ -447,8 +473,9 @@ bool wl_world_save_modified(WlWorld *w)
 /* dropped items                                                       */
 /* ------------------------------------------------------------------ */
 
-bool wl_world_add_drop(WlWorld *w, WlItemId item, uint8_t count, uint16_t dur,
-                       Vector3 pos)
+bool wl_world_add_drop_thrown(WlWorld *w, WlItemId item, uint8_t count,
+                              uint16_t dur, Vector3 pos, Vector3 vel,
+                              float pickup_delay)
 {
     if (!w || item == WL_ITEM_NONE || count == 0) return false;
     if (w->drop_count >= WL_DROPS_MAX) return false; /* caller retries */
@@ -463,12 +490,22 @@ bool wl_world_add_drop(WlWorld *w, WlItemId item, uint8_t count, uint16_t dur,
     d->count = count;
     d->dur = dur;
     d->pos = pos;
-    d->vel.x = ((float)(s & 15) - 7.5f) * 0.25f;
-    d->vel.y = 2.0f + ((s >> 4) & 7) * 0.25f;
-    d->vel.z = ((s >> 7) & 15) * 0.25f - 1.9f;
-    d->age = 0.0f;
+    d->vel = vel;
+    d->age = pickup_delay > 0.0f ? -pickup_delay : 0.0f;
     d->seed = s;
     return true;
+}
+
+bool wl_world_add_drop(WlWorld *w, WlItemId item, uint8_t count, uint16_t dur,
+                       Vector3 pos)
+{
+    /* small random throw */
+    uint32_t s = w->time_ticks * 2654435761u + (uint32_t)w->drop_count * 40503u + 1;
+    s ^= s >> 13; s *= 0x5bd1e995u; s ^= s >> 15;
+    Vector3 vel = { ((float)(s & 15) - 7.5f) * 0.25f,
+                    2.0f + (float)((s >> 4) & 7) * 0.25f,
+                    ((s >> 7) & 15) * 0.25f - 1.9f };
+    return wl_world_add_drop_thrown(w, item, count, dur, pos, vel, 0.5f);
 }
 
 void wl_world_update_drops(WlWorld *w, struct WlPlayer *p, float dt)
@@ -514,6 +551,101 @@ void wl_world_update_drops(WlWorld *w, struct WlPlayer *p, float dt)
             }
         }
     }
+}
+
+WlEntity *wl_world_spawn_entity(WlWorld *w, WlEntityType type, Vector3 pos)
+{
+    if (!w || type <= WL_ENT_NONE || type >= WL_ENT_TYPE_COUNT) return NULL;
+    if (w->ent_count >= WL_ENTITIES_MAX) return NULL;
+
+    WlEntity *e = &w->ents[w->ent_count++];
+    memset(e, 0, sizeof(*e));
+    e->active = true;
+    e->type = type;
+    e->pos = pos;
+    e->id = w->next_ent_id++;
+    wl_entity_defaults(e); /* health + type defaults (entities.c) */
+    return e;
+}
+
+WlEntity *wl_world_entities(WlWorld *w, int *count)
+{
+    if (count) *count = w ? w->ent_count : 0;
+    return w ? w->ents : NULL;
+}
+
+void wl_world_note_entity_id(WlWorld *w, uint32_t id)
+{
+    if (w && w->next_ent_id <= id) w->next_ent_id = id + 1;
+}
+
+WlFurnace *wl_world_get_furnace(WlWorld *w, int x, int y, int z, bool create)
+{
+    if (!w) return NULL;
+    for (int i = 0; i < w->furnace_count; i++)
+        if (w->furnaces[i].active && w->furnaces[i].x == x &&
+            w->furnaces[i].y == y && w->furnaces[i].z == z)
+            return &w->furnaces[i];
+    if (!create) return NULL;
+    if (w->furnace_count >= WL_FURNACES_MAX) return NULL;
+
+    /* reuse an inactive hole when present */
+    for (int i = 0; i < w->furnace_count; i++) {
+        if (!w->furnaces[i].active) {
+            WlFurnace *f = &w->furnaces[i];
+            memset(f, 0, sizeof(*f));
+            /* slot empties are WL_ITEM_NONE, never raw 0 (inventory
+             * convention; keeps can_output honest) */
+            f->input.item = WL_ITEM_NONE;
+            f->fuel.item = WL_ITEM_NONE;
+            f->output.item = WL_ITEM_NONE;
+            f->active = true;
+            f->x = x;
+            f->y = y;
+            f->z = z;
+            return f;
+        }
+    }
+    WlFurnace *f = &w->furnaces[w->furnace_count++];
+    memset(f, 0, sizeof(*f));
+    f->input.item = WL_ITEM_NONE;
+    f->fuel.item = WL_ITEM_NONE;
+    f->output.item = WL_ITEM_NONE;
+    f->active = true;
+    f->x = x;
+    f->y = y;
+    f->z = z;
+    return f;
+}
+
+bool wl_world_remove_furnace(WlWorld *w, int x, int y, int z,
+                             WlSlot out_stacks[3])
+{
+    if (!w) return false;
+    for (int i = 0; i < w->furnace_count; i++) {
+        WlFurnace *f = &w->furnaces[i];
+        if (!f->active || f->x != x || f->y != y || f->z != z) continue;
+        if (out_stacks) {
+            out_stacks[0] = f->input;
+            out_stacks[1] = f->fuel;
+            out_stacks[2] = f->output;
+        }
+        f->active = false;
+        return true;
+    }
+    return false;
+}
+
+const WlFurnace *wl_world_furnaces(const WlWorld *w, int *count)
+{
+    if (count) *count = w ? w->furnace_count : 0;
+    return w ? w->furnaces : NULL;
+}
+
+WlFurnace *wl_world_furnaces_mutable(WlWorld *w, int *count)
+{
+    if (count) *count = w ? w->furnace_count : 0;
+    return w ? w->furnaces : NULL;
 }
 
 const WlDrop *wl_world_drops(const WlWorld *w, int *count)
@@ -724,6 +856,16 @@ void wl_world_update_ex(WlWorld *w, float player_x, float player_z,
         if (cheb_z > cheb) cheb = cheb_z;
         if (cheb > w->render_distance) continue;
         if (!neighbors_ready(w, c->cx, c->cz)) continue;
+        /* relight anything stale in the 3x3 neighborhood first: the mesher
+         * bakes light from the chunk and its side neighbors */
+        if (c->light_dirty) wl_light_chunk(w, c);
+        for (int dz2 = -1; dz2 <= 1; dz2++)
+            for (int dx2 = -1; dx2 <= 1; dx2++) {
+                if (!dx2 && !dz2) continue;
+                WlChunk *nc = wl_world_chunk_at(w, c->cx + dx2, c->cz + dz2);
+                if (nc && nc->generated && nc->light_dirty)
+                    wl_light_chunk(w, nc);
+            }
         double t0 = wl_monotonic_ms();
         wl_mesher_build(w, c);
         w->mesh_ms_last = (float)(wl_monotonic_ms() - t0);

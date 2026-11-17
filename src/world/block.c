@@ -63,6 +63,7 @@ static void reg(WlBlockId expect, WlBlock def)
 #define T6(t) { (t), (t), (t), (t), (t), (t) }
 /* +X -X top bottom +Z -Z for blocks with distinct top/side/bottom */
 #define T6T(side, top, bottom) { (side), (side), (top), (bottom), (side), (side) }
+#define T6T4(front, side, top) { (front), (front), (top), (top), (front), (front) }
 
 void wl_blocks_init(void)
 {
@@ -256,6 +257,7 @@ void wl_blocks_init(void)
         .shape = WL_RENDER_CROSS, .solid = false, .opaque = false,
         .hardness = 0,
         .drop_item = WL_BLOCK_TORCH, .drop_count = 1,
+            .light = 14,
     });
 
     reg(WL_BLOCK_FLOWER_RED, (WlBlock){
@@ -276,6 +278,23 @@ void wl_blocks_init(void)
         .name = "tall_grass", .display = "Tall Grass", .tex = T6(TILE_TALLGRASS),
         .shape = WL_RENDER_CROSS, .solid = false, .opaque = false,
         .hardness = 0, .drop_item = WL_ITEM_NONE,
+    });
+
+    reg(WL_BLOCK_FURNACE, (WlBlock){
+        .name = "furnace", .display = "Furnace",
+        .tex = T6T4(TILE_FURNACE_FRONT, TILE_FURNACE_SIDE, TILE_FURNACE_TOP),
+        .shape = WL_RENDER_SOLID, .solid = true, .opaque = true,
+        .hardness = 16, .tool = WL_TOOL_PICKAXE,
+        .drop_item = WL_BLOCK_FURNACE, .drop_count = 1,
+    });
+
+    reg(WL_BLOCK_FURNACE_LIT, (WlBlock){
+        .name = "furnace_lit", .display = "Furnace",
+        .tex = T6T4(TILE_FURNACE_FRONT_LIT, TILE_FURNACE_SIDE, TILE_FURNACE_TOP),
+        .shape = WL_RENDER_SOLID, .solid = true, .opaque = true,
+        .hardness = 16, .tool = WL_TOOL_PICKAXE,
+        .drop_item = WL_BLOCK_FURNACE, .drop_count = 1,
+        .light = 13,
     });
 
     g_blocks_initialized = true;

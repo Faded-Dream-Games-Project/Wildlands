@@ -1,6 +1,7 @@
 /* worlds.c — world directory management and session save/load. */
 #include "wl/worlds.h"
 #include "wl/world.h"
+#include "wl/entities.h"
 #include "wl/player.h"
 #include "wl/paths.h"
 #include "wl/util.h"
@@ -182,6 +183,8 @@ bool wl_worlds_save_session(WlWorld *w, const WlPlayer *p, Vector3 spawn,
     bool ok = wl_store_save_level(dir, &meta);
     ok = wl_world_save_modified(w) && ok;
     ok = wl_world_save_drops(w) && ok; /* death drops persist with the session */
+    ok = wl_world_save_entities(w) && ok; /* mobs + animals persist too */
+    ok = wl_world_save_furnaces(w) && ok; /* furnace contents + progress */
 
     /* player.dat */
     if (p) {
