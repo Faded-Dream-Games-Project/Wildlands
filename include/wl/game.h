@@ -62,6 +62,17 @@ typedef struct WlGame {
     bool last_save_failed;    /* most recent session save reported failure */
     char gpu_info[160];       /* vendor / renderer / GL version (debug) */
 
+    /* death handling: the inventory is dropped exactly once per death;
+     * the flag resets on respawn (partial drop failures retry, so items
+     * are never silently lost) */
+    bool death_dropped;
+
+    /* camera stability: raylib warps the cursor to the window center in
+     * EnableCursor()/DisableCursor(); the first mouse deltas after such a
+     * warp are the warp itself and must not rotate the camera */
+    int look_guard;
+    bool cursor_hidden_last;
+
     /* HUD */
     float item_toast;       /* seconds remaining to show the held item name */
     char item_toast_name[64];
@@ -164,6 +175,11 @@ bool wl_game_save_session(WlGame *g);
 /* Save-then-quit via the normal shutdown path; returns false (and keeps
  * the game open) when the save failed. */
 bool wl_game_quit_to_desktop(WlGame *g);
+/* Drops the player's inventory (slots, crafting grid, cursor stack) into
+ * the world as collectible item entities. Returns true when everything
+ * was dropped; partially dropped stacks are retried on the next call so
+ * nothing is silently lost or duplicated. */
+bool wl_game_drop_inventory(WlGame *g);
 
 /* Applies window/audio/world-affecting settings right now. */
 void wl_game_apply_settings(WlGame *g);

@@ -525,18 +525,24 @@ void wl_ui_tooltip(WlUi *ui, const char *text)
 static void icon_quad(Texture2D atlas, int tile, const Vector2 p[4], float shade)
 {
     int tc = tile % WL_ATLAS_GRID, tr = tile / WL_ATLAS_GRID;
-    float s = 1.0f / WL_ATLAS_GRID;
+    float s = 1.0f / (float)WL_ATLAS_GRID;
     float u0 = tc * s, u1 = (tc + 1) * s;
     float v0 = tr * s, v1 = (tr + 1) * s;
     unsigned char c = (unsigned char)(shade * 255.0f);
 
+    /* raylib 6.2 enables backface culling at init and the render batch
+     * never turns it off, so quads MUST be wound like raylib's own
+     * (DrawTexturePro emits TL,BL,BR,TR = front-facing). The isometric
+     * skew made the p0..p3 order back-facing, and every block-item icon
+     * was silently culled — the "invisible Oak Log" bug. Emit the same
+     * quad in the opposite order (each vertex keeps its own uv). */
     rlSetTexture(atlas.id);
     rlBegin(RL_QUADS);
     rlColor4ub(c, c, c, 255);
     rlTexCoord2f(u0, v1); rlVertex2f(p[0].x, p[0].y);
-    rlTexCoord2f(u1, v1); rlVertex2f(p[1].x, p[1].y);
-    rlTexCoord2f(u1, v0); rlVertex2f(p[2].x, p[2].y);
     rlTexCoord2f(u0, v0); rlVertex2f(p[3].x, p[3].y);
+    rlTexCoord2f(u1, v0); rlVertex2f(p[2].x, p[2].y);
+    rlTexCoord2f(u1, v1); rlVertex2f(p[1].x, p[1].y);
     rlEnd();
     rlSetTexture(0);
 }
@@ -550,7 +556,6 @@ void wl_ui_draw_item_icon(WlAssets *assets, WlItemId item_id, Rectangle r)
     if (item->is_block) {
         const WlBlock *blk = wl_block_get(item->block_id);
         if (!blk) return;
-
         if (blk->shape == WL_RENDER_CROSS) {
             /* flat sprite for plants */
             int tc = blk->tex[0] % WL_ATLAS_GRID, tr = blk->tex[0] / WL_ATLAS_GRID;

@@ -26,6 +26,9 @@ void wl_inv_init(WlInventory *inv);
 /* Adds items (stacking first, hotbar first). Returns true when everything
  * fit; on false some may have been added. */
 bool wl_inv_add(WlInventory *inv, WlItemId item, uint8_t count, uint16_t dur);
+/* Same, but returns how many actually fit (0 = nothing added) — used by
+ * drop pickup, which must keep the remainder in the world. */
+int  wl_inv_add_partial(WlInventory *inv, WlItemId item, uint8_t count, uint16_t dur);
 int  wl_inv_count(const WlInventory *inv, WlItemId item);
 /* Removes `count` of item if available; returns false (nothing removed) if
  * not enough. */

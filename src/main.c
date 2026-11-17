@@ -1,5 +1,6 @@
 /* main.c — Wildlands entry point. Everything else lives in the modules. */
 #include "wl/game.h"
+#include "wl/log.h"
 
 int main(int argc, char **argv)
 {
@@ -11,6 +12,8 @@ int main(int argc, char **argv)
 
     while (!game.quit && !WindowShouldClose())
         wl_game_run_frame(&game);
+    WL_LOGI("main loop ended (quit flag: %d, window close requested: %d)",
+            game.quit ? 1 : 0, WindowShouldClose() ? 1 : 0);
 
     wl_game_shutdown(&game);
     return game.selftest_failed ? 1 : 0;

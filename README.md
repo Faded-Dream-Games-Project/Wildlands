@@ -23,7 +23,10 @@ identity. Build, explore, survive, and create.
   types, trees, cacti and flowers; superflat world type.
 - **Survival & creative** — mining with tool tiers and durability, block
   placement rules, health/hunger/drowning, fall damage, death & respawn,
-  20-minute day/night cycle, creative flight.
+  20-minute day/night cycle, creative flight. Dying in survival drops
+  your whole inventory into the world as item entities (they fall, bob,
+  persist in the save and can be picked back up); the selected hotbar
+  item renders in your hand.
 - **Pause menu** — Esc pauses (never quits): the world freezes behind a
   dimmed panel with Resume Game, Options (returns to the pause menu),
   Save and Quit to Title, and Quit to Desktop. Failed saves are reported
@@ -52,7 +55,7 @@ make            # release build  -> bin/wildlands
 make debug      # debug build    -> bin/wildlands_debug
 make asan       # AddressSanitizer build
 make run        # build + run (auto-starts Xvfb when no display is present)
-make test       # build + run the unit tests (191 checks)
+make test       # build + run the unit tests (210 checks)
 make selftest   # build + run the in-game runtime self test
 make mods       # build the example mod (mods/example_mod/mod.so)
 make assets     # regenerate original assets (dev only, needs Python+Pillow)
@@ -75,6 +78,12 @@ runtime test (`./bin/wildlands --uitest settings` / `--uitest create` /
 verifies focus, typing, scrolling, dropdown layering, world creation and
 the full pause flow (Esc pause/resume, frozen simulation, Options
 round-trip, Save and Quit to Title, Quit to Desktop) end to end.
+
+`tools/input_test.sh` drives the real game under Xvfb with genuine X11
+key/mouse events (`tools/xsend.c`), verifying that Esc/E open their menus
+and keep them open, the camera does not jump across menu transitions,
+icons render, the held item follows hotbar selection, and mined blocks
+appear in the hotbar.
 
 `tools/repro_render.sh` and `tools/verify_battery.sh` reproduce and
 regression-test the render pipeline against camera-motion artifacts

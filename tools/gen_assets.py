@@ -627,15 +627,22 @@ def gui_panel():
 
 
 def gui_slot(sel=False):
-    img = Image.new("RGBA", (20, 20), (20, 22, 26, 255))
-    d = ImageDraw.Draw(img)
-    d.line([1, 1, 18, 1], fill=(12, 13, 15, 255))
-    d.line([1, 1, 1, 18], fill=(12, 13, 15, 255))
-    d.line([1, 18, 18, 18], fill=(74, 78, 84, 255))
-    d.line([18, 1, 18, 18], fill=(74, 78, 84, 255))
     if sel:
+        # selection highlight: a BORDER ONLY. It is drawn on top of the
+        # slot and its item icon, so the center must stay transparent —
+        # an opaque plate here hides the selected item ("invisible held
+        # item" bug).
+        img = Image.new("RGBA", (20, 20), (0, 0, 0, 0))
+        d = ImageDraw.Draw(img)
         d.rectangle([0, 0, 19, 19], outline=(240, 230, 170, 255))
         d.rectangle([1, 1, 18, 18], outline=(240, 230, 170, 255))
+    else:
+        img = Image.new("RGBA", (20, 20), (20, 22, 26, 255))
+        d = ImageDraw.Draw(img)
+        d.line([1, 1, 18, 1], fill=(12, 13, 15, 255))
+        d.line([1, 1, 1, 18], fill=(12, 13, 15, 255))
+        d.line([1, 18, 18, 18], fill=(74, 78, 84, 255))
+        d.line([18, 1, 18, 18], fill=(74, 78, 84, 255))
     img.save(A / "gui" / ("slot_selected.png" if sel else "slot.png"))
 
 

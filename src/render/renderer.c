@@ -5,6 +5,9 @@
 #include "wl/player.h"
 #include "wl/config.h"
 #include "wl/block.h"
+#include "wl/item.h"
+#include "wl/tiles.h"
+#include "wl/mesher.h" /* wl_tile_uv */
 #include "wl/log.h"
 
 #include <math.h>
@@ -248,6 +251,12 @@ void wl_renderer_shutdown(WlRenderer *r)
         UnloadMesh(r->cloud_mesh);
         r->cloud_ok = false;
     }
+    for (int i = 0; i < 256; i++) {
+        if (r->item_mesh_ok[i]) {
+            UnloadMesh(r->item_mesh[i]);
+            r->item_mesh_ok[i] = false;
+        }
+    }
     /* The materials are plain structs sharing the assets-owned shader and
      * atlas texture — wl_assets_destroy() owns their lifetime, so nothing
      * else is unloaded here. */
@@ -431,5 +440,165 @@ void wl_renderer_draw_world(WlRenderer *r, WlWorld *w, const struct WlConfig *cf
     rlEnableDepthMask();
     wl_renderer_gl_check("water-pass");
 
+    EndMode3D();
+}
+
+/* ------------------------------------------------------------------ */
+/* item entity meshes (held item + world drops)                        */
+/* ------------------------------------------------------------------ */
+
+/* quad facing +axis: emits two triangles wound front-facing (raylib 6.2
+ * enables backface culling and the render batch never disables it) */
+static void item_face(float *pos, float *uv, unsigned char *col, unsigned short *idx,
+                      int *vc, int *ic,
+                      const float p[4][3], int tile, unsigned char shade)
+{
+    float u0, v0, u1, v1;
+    wl_tile_uv(tile, &u0, &v0, &u1, &v1);
+    for (int i = 0; i < 4; i++) {
+        pos[3 * (*vc + i) + 0] = p[i][0];
+        pos[3 * (*vc + i) + 1] = p[i][1];
+        pos[3 * (*vc + i) + 2] = p[i][2];
+        uv[2 * (*vc + i) + 0] = (i == 0 || i == 3) ? u0 : u1;
+        uv[2 * (*vc + i) + 1] = (i == 0 || i == 1) ? v1 : v0;
+        col[4 * (*vc + i) + 0] = shade;
+        col[4 * (*vc + i) + 1] = shade;
+        col[4 * (*vc + i) + 2] = shade;
+        col[4 * (*vc + i) + 3] = 255;
+    }
+    idx[(*ic)++] = (unsigned short)(*vc + 0);
+    idx[(*ic)++] = (unsigned short)(*vc + 1);
+    idx[(*ic)++] = (unsigned short)(*vc + 2);
+    idx[(*ic)++] = (unsigned short)(*vc + 0);
+    idx[(*ic)++] = (unsigned short)(*vc + 2);
+    idx[(*ic)++] = (unsigned short)(*vc + 3);
+    *vc += 4;
+}
+
+static const Mesh *item_mesh(WlRenderer *r, WlItemId item)
+{
+    if (item == WL_ITEM_NONE || item >= 256 || !wl_item_valid(item)) return NULL;
+    if (r->item_mesh_ok[item]) return &r->item_mesh[item];
+
+    const WlItem *def = wl_item_get(item);
+    int tile = -1;
+    const WlBlock *blk = NULL;
+    if (def->is_block) {
+        blk = wl_block_get(def->block_id);
+        if (!blk) return NULL;
+        if (blk->shape != WL_RENDER_CROSS) tile = -2; /* full cube */
+    }
+    if (tile >= 0 || tile == -2) {
+        /* build */
+        Mesh m;
+        memset(&m, 0, sizeof(m));
+        int cap_v = (tile == -2) ? 24 : 8;  /* cube: 6 faces; sprite: 2 sides */
+        int cap_i = (tile == -2) ? 36 : 12;
+        float *pos = malloc((size_t)cap_v * 3 * sizeof(float));
+        float *uv = malloc((size_t)cap_v * 2 * sizeof(float));
+        unsigned char *col = malloc((size_t)cap_v * 4);
+        unsigned short *ix = malloc((size_t)cap_i * sizeof(unsigned short));
+        if (!pos || !uv || !col || !ix) {
+            free(pos); free(uv); free(col); free(ix);
+            return NULL;
+        }
+        int vc = 0, ic = 0;
+
+        if (tile == -2) {
+            /* unit cube around the origin, one atlas tile per face */
+            static const float faces[6][4][3] = {
+                { { .5f,-.5f,-.5f}, { .5f, .5f,-.5f}, { .5f, .5f, .5f}, { .5f,-.5f, .5f} }, /* +X */
+                { {-.5f,-.5f, .5f}, {-.5f, .5f, .5f}, {-.5f, .5f,-.5f}, {-.5f,-.5f,-.5f} }, /* -X */
+                { {-.5f, .5f, .5f}, { .5f, .5f, .5f}, { .5f, .5f,-.5f}, {-.5f, .5f,-.5f} }, /* +Y */
+                { {-.5f,-.5f,-.5f}, { .5f,-.5f,-.5f}, { .5f,-.5f, .5f}, {-.5f,-.5f, .5f} }, /* -Y */
+                { {-.5f,-.5f, .5f}, { .5f,-.5f, .5f}, { .5f, .5f, .5f}, {-.5f, .5f, .5f} }, /* +Z */
+                { { .5f,-.5f,-.5f}, {-.5f,-.5f,-.5f}, {-.5f, .5f,-.5f}, { .5f, .5f,-.5f} }, /* -Z */
+            };
+            static const unsigned char shade[6] = { 190, 150, 255, 120, 210, 170 };
+            for (int f = 0; f < 6; f++)
+                item_face(pos, uv, col, ix, &vc, &ic, faces[f], blk->tex[f], shade[f]);
+        } else {
+            /* flat sprite, both windings so it is visible from two sides */
+            float s = 0.5f;
+            float front[4][3] = { {-s,-s,0}, { s,-s,0}, { s, s,0}, {-s, s,0} };
+            float back[4][3]  = { { s,-s,0}, {-s,-s,0}, {-s, s,0}, { s, s,0} };
+            int t = tile >= 0 ? tile : blk->tex[0];
+            item_face(pos, uv, col, ix, &vc, &ic, front, t, 255);
+            item_face(pos, uv, col, ix, &vc, &ic, back, t, 255);
+        }
+
+        m.vertexCount = vc;
+        m.triangleCount = ic / 3;
+        m.vertices = pos;
+        m.texcoords = uv;
+        m.colors = col;
+        m.indices = ix;
+        UploadMesh(&m, false);
+        r->item_mesh[item] = m;
+        r->item_mesh_ok[item] = true;
+        return &r->item_mesh[item];
+    }
+    return NULL;
+}
+
+void wl_renderer_draw_drops(WlRenderer *r, struct WlWorld *w, uint32_t ticks)
+{
+    int count = 0;
+    const WlDrop *drops = wl_world_drops(w, &count);
+    if (!drops || count == 0) return;
+
+    float t = (float)ticks * 0.05f;
+    Vector3 cp = r->cam.position;
+    BeginMode3D(r->cam);
+    set_shader_uniforms(r, 0.0f, 0.0f);
+    for (int i = 0; i < count; i++) {
+        const WlDrop *d = &drops[i];
+        float dx = d->pos.x - cp.x, dz = d->pos.z - cp.z;
+        if (dx * dx + dz * dz > r->fog_far * r->fog_far) continue; /* fogged out */
+        const Mesh *m = item_mesh(r, d->item);
+        if (!m) continue;
+        float spin = t * 1.4f + (float)(d->seed & 63) * 0.1f;
+        float bob = sinf(t * 2.0f + (float)(d->seed & 31) * 0.2f) * 0.06f;
+        Vector3 pos = { d->pos.x, d->pos.y + 0.14f + bob, d->pos.z };
+        /* MatrixMultiply(A,B) = B*A, so build T * Ry * S from the right */
+        Matrix tf = MatrixMultiply(MatrixScale(0.26f, 0.26f, 0.26f),
+                                   MatrixRotateY(spin));
+        tf = MatrixMultiply(tf, MatrixTranslate(pos.x, pos.y, pos.z));
+        DrawMesh(*m, r->mat_opaque, tf);
+    }
+    EndMode3D();
+}
+
+void wl_renderer_draw_held_item(WlRenderer *r, const struct WlPlayer *p)
+{
+    if (!p || p->dead) return;
+    WlSlot slot = p->inv.slots[p->selected_slot];
+    if (slot.item == WL_ITEM_NONE) return; /* empty hand draws nothing */
+    const Mesh *m = item_mesh(r, slot.item);
+    if (!m) return;
+
+    /* camera-space placement: forward + right + down, tilted like a hand */
+    Vector3 f = Vector3Subtract(r->cam.target, r->cam.position);
+    f = Vector3Normalize(f);
+    Vector3 up = { 0.0f, 1.0f, 0.0f };
+    Vector3 right = Vector3CrossProduct(f, up);
+    right = Vector3Normalize(right);
+    Vector3 pos = Vector3Add(r->cam.position, f);
+    pos = Vector3Add(pos, Vector3Scale(right, 0.46f));
+    pos.y -= 0.42f;
+
+    float yaw = atan2f(f.x, f.z) + 0.7f;
+    Matrix tf = MatrixMultiply(MatrixScale(0.30f, 0.30f, 0.30f),
+                               MatrixRotateX(-0.32f));
+    tf = MatrixMultiply(tf, MatrixRotateY(yaw));
+    tf = MatrixMultiply(tf, MatrixTranslate(pos.x, pos.y, pos.z));
+
+    /* never buried in terrain: flush, clear depth, then draw on top of
+     * everything while still lighting/fogging it like the world */
+    rlDrawRenderBatchActive();
+    glClear(GL_DEPTH_BUFFER_BIT);
+    BeginMode3D(r->cam);
+    set_shader_uniforms(r, 0.0f, 0.0f);
+    DrawMesh(*m, r->mat_opaque, tf);
     EndMode3D();
 }

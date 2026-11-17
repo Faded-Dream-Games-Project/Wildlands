@@ -14,10 +14,10 @@ void wl_inv_init(WlInventory *inv)
     inv->craft_w = 0;
 }
 
-bool wl_inv_add(WlInventory *inv, WlItemId item, uint8_t count, uint16_t dur)
+int wl_inv_add_partial(WlInventory *inv, WlItemId item, uint8_t count, uint16_t dur)
 {
     const WlItem *def = wl_item_get(item);
-    if (!def || count == 0) return false;
+    if (!def || count == 0) return 0;
 
     int remaining = count;
     int max = def->max_stack > 0 ? def->max_stack : 64;
@@ -51,7 +51,12 @@ bool wl_inv_add(WlInventory *inv, WlItemId item, uint8_t count, uint16_t dur)
             remaining--;
         }
     }
-    return remaining == 0;
+    return count - remaining;
+}
+
+bool wl_inv_add(WlInventory *inv, WlItemId item, uint8_t count, uint16_t dur)
+{
+    return wl_inv_add_partial(inv, item, count, dur) == (int)count;
 }
 
 int wl_inv_count(const WlInventory *inv, WlItemId item)

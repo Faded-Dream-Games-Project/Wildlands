@@ -563,6 +563,83 @@ static void test_input_seams(void)
     CHECK(!wl_keybinds_down(&kb, WL_ACT_FORWARD));
 }
 
+/* drop entities + partial inventory add (death-drop machinery) */
+static void test_drops_and_partial_add(void)
+{
+    WlInventory inv;
+    wl_inv_init(&inv);
+
+    /* partial add: stacks onto the existing pile, then opens new slots;
+     * reports how many were actually added */
+    wl_inv_add(&inv, WL_BLOCK_LOG, 60, 0);           /* stack of 60 */
+    int taken = wl_inv_add_partial(&inv, WL_BLOCK_LOG, 30, 0);
+    CHECK(taken == 30);                              /* 4 stack + 26 new slot */
+    CHECK(inv.slots[0].count == 64);
+    CHECK(wl_inv_count(&inv, WL_BLOCK_LOG) == 90);
+
+    /* a nearly-full inventory accepts only what fits: one open log
+     * stack with room for 63, and no empty slots anywhere else */
+    wl_inv_init(&inv);
+    inv.slots[0].item = WL_BLOCK_LOG;
+    inv.slots[0].count = 1;
+    for (int i = 1; i < WL_INV_SIZE; i++) {
+        inv.slots[i].item = WL_BLOCK_COBBLE;
+        inv.slots[i].count = 64;
+    }
+    taken = wl_inv_add_partial(&inv, WL_BLOCK_LOG, 100, 0);
+    CHECK(taken == 63);
+    CHECK(wl_inv_count(&inv, WL_BLOCK_LOG) == 64);
+
+    /* tools stack to 1: partial add across empty slots */
+    wl_inv_init(&inv);
+    taken = wl_inv_add_partial(&inv, WL_ITEM_PICK_IRON, 3, 120);
+    CHECK(taken == 3);
+    CHECK(wl_inv_count(&inv, WL_ITEM_PICK_IRON) == 3);
+    taken = wl_inv_add_partial(&inv, WL_ITEM_PICK_IRON, 40, 0);
+    CHECK(taken == 33);                              /* 36 slots - 3 used */
+    CHECK(wl_inv_add_partial(&inv, WL_ITEM_APPLE, 5, 0) == 0); /* full */
+
+    /* drop lifecycle: add, physics-only update, save + reload */
+    const char *dir = "tests/.tmp-drops";
+    wl_delete_tree(dir);
+    CHECK(wl_mkdir_p(dir));
+    WlWorldParams params;
+    memset(&params, 0, sizeof(params));
+    wl_scpy(params.name, "DropTest", sizeof(params.name));
+    params.seed = 99;
+    params.type = WL_WORLDTYPE_STANDARD;
+    params.gamemode = WL_WORLD_GAMEMODE_SURVIVAL;
+    WlWorld *w = wl_world_create(&params, dir);
+    CHECK(w != NULL);
+    if (w) {
+        Vector3 pos = { 0.5f, 80.0f, 0.5f };
+        CHECK(wl_world_add_drop(w, WL_BLOCK_LOG, 12, 0, pos));
+        CHECK(wl_world_add_drop(w, WL_ITEM_APPLE, 5, 0, pos));
+        int drops = 0;
+        wl_world_drops(w, &drops);
+        CHECK(drops == 2);
+
+        /* cap: the list refuses extra stacks when full is not tested
+         * here (256 spawns); save/load round-trip is what matters */
+        CHECK(wl_world_save_drops(w));
+
+        WlWorld *w2 = wl_world_create(&params, dir);
+        CHECK(w2 != NULL);
+        if (w2) {
+            int drops2 = 0;
+            const WlDrop *d2 = wl_world_drops(w2, &drops2);
+            CHECK(drops2 == 2);
+            if (drops2 == 2) {
+                CHECK(d2[0].item == WL_BLOCK_LOG && d2[0].count == 12);
+                CHECK(d2[1].item == WL_ITEM_APPLE && d2[1].count == 5);
+            }
+            wl_world_destroy(w2);
+        }
+        wl_world_destroy(w);
+    }
+    wl_delete_tree(dir);
+}
+
 int main(void)
 {
     test_util();
@@ -581,6 +658,7 @@ int main(void)
     test_frustum();
     test_textfield_edit();
     test_input_seams();
+    test_drops_and_partial_add();
 
     printf("unit tests: %d run, %d failed\r\n", tests_run, tests_failed);
     return tests_failed ? 1 : 0;

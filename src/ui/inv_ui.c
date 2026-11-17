@@ -325,10 +325,9 @@ void wl_inv_ui_draw(WlGame *g)
         wl_ui_draw_slot_item(&g->ui, held_r, &g->ui_held);
     }
 
-    /* close: E / ESC */
-    if (IsKeyPressed(g->keys.key[WL_ACT_INVENTORY]) ||
-        IsKeyPressed(g->keys.key[WL_ACT_PAUSE])) {
-        wl_inv_ui_close(g);
-        DisableCursor();
-    }
+    /* NOTE: close handling (inventory key / Esc) lives in play_frame's
+     * global-keys block, NOT here. This screen draws while the overlay is
+     * open on the very frame the key opened it, and IsKeyPressed() stays
+     * true for the whole frame — a close check here would immediately
+     * close the inventory again ("inventory instantly closes" bug). */
 }

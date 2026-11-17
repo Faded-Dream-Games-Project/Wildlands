@@ -35,6 +35,11 @@ typedef struct WlRenderer {
     Mesh cloud_mesh;
     bool cloud_ok;
 
+    /* lazily-built meshes for item entities (held item + world drops),
+     * indexed by item id; id 0 is never used */
+    Mesh item_mesh[256];
+    bool item_mesh_ok[256];
+
     int drawn_chunks;
     int visible_chunks; /* frustum-visible (drawn + fog-skipped) */
     long drawn_tris;
@@ -62,6 +67,15 @@ void wl_renderer_begin(WlRenderer *r, const struct WlPlayer *p,
 void wl_renderer_draw_world(WlRenderer *r, struct WlWorld *w,
                             const struct WlConfig *cfg, uint32_t ticks,
                             bool cam_underwater);
+
+/* World drop entities (death drops): spinning item meshes, fog-culled.
+ * Call right after wl_renderer_draw_world(). */
+void wl_renderer_draw_drops(WlRenderer *r, struct WlWorld *w, uint32_t ticks);
+
+/* First-person held item for the selected hotbar slot: a small block
+ * cube or item sprite in camera space, depth-cleared so terrain never
+ * covers it. Call after the world + drops, still inside BeginDrawing(). */
+void wl_renderer_draw_held_item(WlRenderer *r, const struct WlPlayer *p);
 
 Vector3 wl_renderer_cam_pos(const WlRenderer *r);
 /* Current light multiplier for UI effects (darken HUD at night). */

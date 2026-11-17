@@ -3,6 +3,8 @@
 #define WL_WORLD_H
 
 #include "wl/wl_common.h"
+#include "wl/item.h"    /* WlItemId for drops */
+#include "wl/player.h"  /* drop pickup target */
 #include "wl/chunk.h"
 #include "wl/worldgen.h"
 
@@ -21,6 +23,19 @@ typedef struct {
     int type;      /* WlWorldType */
     int gamemode;
 } WlWorldParams;
+
+/* A stack of items lying in the world (death drops). */
+typedef struct WlDrop {
+    WlItemId item;   /* what to pick up                      */
+    uint8_t count;   /* stack size                           */
+    uint16_t dur;    /* tool durability (0 = fresh)          */
+    Vector3 pos;     /* center position, world space         */
+    Vector3 vel;     /* physics velocity                     */
+    float age;       /* seconds since spawn (pickup delay)   */
+    uint32_t seed;   /* per-drop spin/bob phase              */
+} WlDrop;
+
+#define WL_DROPS_MAX 256
 
 typedef struct {
     int loaded;        /* chunks in memory          */
@@ -76,6 +91,21 @@ bool wl_world_save_modified(WlWorld *w);
 /* Loads a saved chunk over the chunk's generated data (marks it clean).
  * Returns false when no save exists (fresh generation stays). */
 bool wl_world_load_saved_chunk(WlWorld *w, WlChunk *c);
+
+/* --- dropped items (death drops) --- */
+/* Spawns one drop entity with a small random throw velocity. Returns
+ * false when the drop list is full (caller retries later). */
+bool wl_world_add_drop(WlWorld *w, WlItemId item, uint8_t count, uint16_t dur,
+                       Vector3 pos);
+/* Physics + pickup against the player. `pickup` may be NULL to only
+ * simulate. Adds what fits back into the inventory and keeps the rest in
+ * the world. */
+void wl_world_update_drops(WlWorld *w, WlPlayer *p, float dt);
+/* Dense list of active drops (valid until the next update call). */
+const WlDrop *wl_world_drops(const WlWorld *w, int *count);
+/* Saves/loads drops.dat in the world's save dir. */
+bool wl_world_save_drops(const WlWorld *w);
+void wl_world_load_drops(WlWorld *w);
 
 WlWorldStats wl_world_stats(const WlWorld *w);
 int wl_world_gamemode(const WlWorld *w);

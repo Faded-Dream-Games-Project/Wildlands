@@ -181,6 +181,7 @@ bool wl_worlds_save_session(WlWorld *w, const WlPlayer *p, Vector3 spawn,
 
     bool ok = wl_store_save_level(dir, &meta);
     ok = wl_world_save_modified(w) && ok;
+    ok = wl_world_save_drops(w) && ok; /* death drops persist with the session */
 
     /* player.dat */
     if (p) {

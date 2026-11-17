@@ -9,9 +9,12 @@
 #include "wl/mesher.h"
 #include "wl/world_store.h"
 #include "wl/block.h"
+#include "wl/player.h"
 #include "wl/util.h"
+#include "wl/paths.h" /* wl_path_join */
 #include "wl/log.h"
 
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
@@ -60,6 +63,10 @@ struct WlWorld {
     int chunk_count;
     WlChunk **list;
     int list_count, list_cap;
+
+    /* dropped items (compacted: active drops live at [0, drop_count)) */
+    WlDrop drops[WL_DROPS_MAX];
+    int drop_count;
 
     /* generation worker */
     bool thread_ok;
@@ -284,6 +291,7 @@ WlWorld *wl_world_create(const WlWorldParams *params, const char *save_dir)
     w->gamemode = params->gamemode;
     w->render_distance = 8;
     wl_scpy(w->save_dir, save_dir ? save_dir : "", sizeof(w->save_dir));
+    wl_world_load_drops(w); /* existing death drops, if any */
 
     pthread_mutex_init(&w->lock, NULL);
     pthread_cond_init(&w->cv_work, NULL);
@@ -433,6 +441,137 @@ bool wl_world_save_modified(WlWorld *w)
     }
     if (saved > 0) WL_LOGI("saved %d modified chunks", saved);
     return ok;
+}
+
+/* ------------------------------------------------------------------ */
+/* dropped items                                                       */
+/* ------------------------------------------------------------------ */
+
+bool wl_world_add_drop(WlWorld *w, WlItemId item, uint8_t count, uint16_t dur,
+                       Vector3 pos)
+{
+    if (!w || item == WL_ITEM_NONE || count == 0) return false;
+    if (w->drop_count >= WL_DROPS_MAX) return false; /* caller retries */
+
+    /* deterministic pseudo-random from the world time so repeated runs
+     * of the same session scatter drops identically */
+    uint32_t s = w->time_ticks * 2654435761u + (uint32_t)w->drop_count * 40503u + 1;
+    s ^= s >> 13; s *= 0x5bd1e995u; s ^= s >> 15;
+
+    WlDrop *d = &w->drops[w->drop_count++];
+    d->item = item;
+    d->count = count;
+    d->dur = dur;
+    d->pos = pos;
+    d->vel.x = ((float)(s & 15) - 7.5f) * 0.25f;
+    d->vel.y = 2.0f + ((s >> 4) & 7) * 0.25f;
+    d->vel.z = ((s >> 7) & 15) * 0.25f - 1.9f;
+    d->age = 0.0f;
+    d->seed = s;
+    return true;
+}
+
+void wl_world_update_drops(WlWorld *w, struct WlPlayer *p, float dt)
+{
+    if (!w) return;
+    const float pickup_radius = 1.4f;
+
+    for (int i = w->drop_count - 1; i >= 0; i--) {
+        WlDrop *d = &w->drops[i];
+        d->age += dt;
+
+        /* gravity + ground collision */
+        d->vel.y -= 22.0f * dt;
+        d->pos.x += d->vel.x * dt;
+        d->pos.y += d->vel.y * dt;
+        d->pos.z += d->vel.z * dt;
+        int bx = (int)floorf(d->pos.x);
+        int by = (int)floorf(d->pos.y - 0.12f);
+        int bz = (int)floorf(d->pos.z);
+        if (wl_world_solid_at(w, bx, by, bz)) {
+            d->pos.y = (float)(by + 1) + 0.12f;
+            if (d->vel.y < 0.0f) d->vel.y = 0.0f;
+            d->vel.x *= 0.72f;
+            d->vel.z *= 0.72f;
+        }
+
+        /* pickup: player center within radius, after a short delay so
+         * freshly dropped stacks do not teleport back instantly */
+        if (p && !p->dead && d->age > 0.5f) {
+            Vector3 pc = p->pos;
+            float dx = d->pos.x - pc.x;
+            float dy = d->pos.y - (pc.y + 0.9f);
+            float dz = d->pos.z - pc.z;
+            if (dx * dx + dy * dy + dz * dz < pickup_radius * pickup_radius) {
+                int taken = wl_inv_add_partial(&p->inv, d->item, d->count, d->dur);
+                if (taken > 0) {
+                    d->count = (uint8_t)(d->count - taken);
+                    if (d->count == 0) {
+                        w->drops[i] = w->drops[--w->drop_count];
+                        continue;
+                    }
+                }
+            }
+        }
+    }
+}
+
+const WlDrop *wl_world_drops(const WlWorld *w, int *count)
+{
+    if (count) *count = w ? w->drop_count : 0;
+    return w ? w->drops : NULL;
+}
+
+bool wl_world_save_drops(const WlWorld *w)
+{
+    if (!w || w->save_dir[0] == '\0') return false;
+    char path[WL_PATH_MAX];
+    if (!wl_path_join(path, sizeof(path), w->save_dir, "drops.dat"))
+        return false;
+
+    WlStrBuf sb;
+    if (!wl_sb_init(&sb, 512)) return false;
+    bool ok = wl_sb_printf(&sb, "# Wildlands dropped items\n");
+    for (int i = 0; i < w->drop_count && ok; i++) {
+        const WlDrop *d = &w->drops[i];
+        ok = wl_sb_printf(&sb, "drop = %u %u %u %.2f %.2f %.2f\n",
+                          (unsigned)d->item, (unsigned)d->count, (unsigned)d->dur,
+                          d->pos.x, d->pos.y, d->pos.z);
+    }
+    if (ok) ok = wl_write_file_atomic(path, sb.buf, sb.len);
+    wl_sb_free(&sb);
+    if (!ok) WL_LOGE("failed to write %s", path);
+    return ok;
+}
+
+void wl_world_load_drops(WlWorld *w)
+{
+    if (!w || w->save_dir[0] == '\0') return;
+    char path[WL_PATH_MAX];
+    if (!wl_path_join(path, sizeof(path), w->save_dir, "drops.dat")) return;
+    if (!wl_file_exists(path)) return;
+
+    FILE *f = fopen(path, "rb");
+    if (!f) return;
+    char line[128];
+    w->drop_count = 0;
+    while (w->drop_count < WL_DROPS_MAX && fgets(line, sizeof(line), f)) {
+        unsigned item, count, dur;
+        float x, y, z;
+        if (sscanf(line, "drop = %u %u %u %f %f %f",
+                   &item, &count, &dur, &x, &y, &z) == 6 &&
+            item != WL_ITEM_NONE && count > 0) {
+            WlDrop *d = &w->drops[w->drop_count++];
+            memset(d, 0, sizeof(*d));
+            d->item = (WlItemId)item;
+            d->count = (uint8_t)(count > 64 ? 64 : count);
+            d->dur = (uint16_t)dur;
+            d->pos = (Vector3){ x, y, z };
+            d->age = 10.0f; /* old enough for instant pickup */
+        }
+    }
+    fclose(f);
+    WL_LOGI("loaded %d dropped items", w->drop_count);
 }
 
 bool wl_world_load_saved_chunk(WlWorld *w, WlChunk *c)

@@ -476,6 +476,8 @@ bool wl_game_enter_world(WlGame *g, const WlWorldEntry *entry)
     g->session_start = GetTime();
     g->autosave_timer = 0.0;
     g->load_initial_pending = -1;
+    g->death_dropped = false;
+    g->look_guard = 0;
     g->ui_held.item = WL_ITEM_NONE;
     EnableCursor();
 
@@ -534,6 +536,40 @@ bool wl_game_quit_to_desktop(WlGame *g)
     if (!wl_game_save_session(g)) return false;
     g->quit = true;
     return true;
+}
+
+bool wl_game_drop_inventory(WlGame *g)
+{
+    if (!g->world) return true; /* nothing to drop into */
+    bool all_dropped = true;
+    Vector3 pos = { g->player.pos.x, g->player.pos.y + 0.9f, g->player.pos.z };
+
+    /* drop every occupied source: hotbar+main slots, the crafting grid
+     * and the stack held by the mouse — cleared only after the drop
+     * entity exists, so a full drop list retries next frame without
+     * losing or duplicating anything */
+    WlSlot *sources[WL_INV_SIZE + WL_CRAFT_GRID_MAX + 1];
+    int n = 0;
+    for (int i = 0; i < WL_INV_SIZE; i++) sources[n++] = &g->player.inv.slots[i];
+    for (int i = 0; i < WL_CRAFT_GRID_MAX; i++) sources[n++] = &g->player.inv.craft[i];
+    sources[n++] = &g->ui_held;
+
+    int dropped = 0;
+    for (int i = 0; i < n; i++) {
+        WlSlot *s = sources[i];
+        if (s->item == WL_ITEM_NONE) continue;
+        if (wl_world_add_drop(g->world, s->item, s->count, s->dur, pos)) {
+            WL_LOGD("death drop: %d x item %u", (int)s->count, (unsigned)s->item);
+            s->item = WL_ITEM_NONE;
+            s->count = 0;
+            s->dur = 0;
+            dropped++;
+        } else {
+            all_dropped = false; /* drop list full: retry the rest later */
+        }
+    }
+    if (dropped > 0) WL_LOGI("dropped %d stacks on death", dropped);
+    return all_dropped;
 }
 
 /* ------------------------------------------------------------------ */
@@ -687,10 +723,73 @@ static void run_selftest(WlGame *g)
         selftest_check(g, "session files written", files);
     }
 
-    /* 7. return to the main menu */
+    /* 7. death drops the whole inventory into the world */
+    wl_inv_init(&p->inv); /* deterministic: earlier steps mined blocks */
+    wl_inv_add(&p->inv, WL_BLOCK_LOG, 12, 0);
+    wl_inv_add(&p->inv, WL_ITEM_APPLE, 5, 0);
+    int save_difficulty = g->cfg.difficulty;
+    if (save_difficulty == 0) g->cfg.difficulty = 2; /* peaceful blocks damage */
+    wl_player_damage(p, 1000.0f, &g->audio, g->cfg.difficulty);
+    selftest_check(g, "player dies", p->dead);
+    g->cfg.difficulty = save_difficulty;
+    bool dropped = wl_game_drop_inventory(g);
+    selftest_check(g, "death drop reports complete", dropped);
+    int drops = 0;
+    wl_world_drops(w, &drops);
+    selftest_check(g, "death spawned 2 drop stacks", drops == 2);
+    selftest_check(g, "inventory emptied on death",
+                   wl_inv_count(&p->inv, WL_BLOCK_LOG) == 0 &&
+                   wl_inv_count(&p->inv, WL_ITEM_APPLE) == 0);
+
+    /* 8. respawn + pickup: no loss, no duplication. Let the stacks
+     * settle first (physics only), then stand the player on them. */
+    wl_player_respawn(p, g->spawn);
+    selftest_check(g, "player respawns", !p->dead);
+    for (int i = 0; i < 12; i++) wl_world_update_drops(w, NULL, 0.1f);
+    const WlDrop *dl = wl_world_drops(w, &drops);
+    selftest_check(g, "drops settled and still present", drops >= 1);
+    /* the stacks scatter apart when thrown; stand on each in turn */
+    for (int guard = 0; guard < 8 && drops > 0; guard++) {
+        dl = wl_world_drops(w, &drops);
+        p->pos = (Vector3){ dl[0].pos.x, dl[0].pos.y - 0.9f, dl[0].pos.z };
+        wl_world_update_drops(w, p, 0.1f);
+    }
+    selftest_check(g, "dropped items collected",
+                   wl_inv_count(&p->inv, WL_BLOCK_LOG) == 12 &&
+                   wl_inv_count(&p->inv, WL_ITEM_APPLE) == 5);
+    wl_world_drops(w, &drops);
+    selftest_check(g, "no leftover or duplicated drops", drops == 0);
+
+    /* 9. drops survive a save + reload round-trip */
+    wl_world_add_drop(w, WL_BLOCK_COBBLE, 7, 0,
+                      (Vector3){ p->pos.x, p->pos.y + 1.0f, p->pos.z });
+    wl_game_save_session(g);
+    {
+        char path[WL_PATH_MAX], wdir[WL_PATH_MAX];
+        bool ok = wl_worlds_dir_path(wdir, sizeof(wdir), wl_world_name(w)) &&
+                  wl_path_join(path, sizeof(path), wdir, "drops.dat") &&
+                  wl_file_exists(path);
+        selftest_check(g, "drops.dat written", ok);
+    }
     wl_game_exit_world(g);
     selftest_check(g, "exit to main menu",
                    g->state == WL_STATE_MAIN_MENU && g->world == NULL);
+    if (wl_game_enter_world(g, &g->entry)) {
+        w = g->world;
+        wl_world_drops(w, &drops);
+        selftest_check(g, "drops survive save+reload", drops == 1);
+        /* collect them so the follow-up exit save is clean */
+        for (int i = 0; i < 12; i++) wl_world_update_drops(w, NULL, 0.1f);
+        const WlDrop *rd = wl_world_drops(w, &drops);
+        for (int guard = 0; guard < 8 && drops > 0; guard++) {
+            rd = wl_world_drops(w, &drops);
+            g->player.pos = (Vector3){ rd[0].pos.x, rd[0].pos.y - 0.9f, rd[0].pos.z };
+            wl_world_update_drops(w, &g->player, 0.1f);
+        }
+        wl_game_exit_world(g);
+    } else {
+        selftest_check(g, "re-enter world after death test", false);
+    }
 
     WL_LOGI("SELFTEST %s", g->selftest_failed ? "FAILED" : "PASSED");
     g->quit = true;
@@ -1220,25 +1319,33 @@ static void play_frame(WlGame *g)
     bool overlay_open = (g->overlay == WL_OVERLAY_INVENTORY ||
                          g->overlay == WL_OVERLAY_CRAFTING);
 
+    /* Pausing must NOT return early: raylib polls input inside
+     * EndDrawing(), so a frame that skips it never sees the key release
+     * and the very same ESC edge is still "pressed" on the next frame —
+     * where the pause menu's own ESC handler would instantly resume.
+     * Instead we open the pause state, skip input+simulation and still
+     * present this frame. */
+    bool pause_now = false;
+
     /* pause when the window loses focus */
     if (g->cfg.pause_on_focus_loss && !IsWindowFocused() && g->demo_frames <= 0) {
         g->state = WL_STATE_PAUSED;
         EnableCursor();
-        return;
+        pause_now = true;
     }
 
     /* global keys */
-    if (wl_game_key_pressed(g, g->keys.key[WL_ACT_PAUSE])) {
+    if (!pause_now && wl_game_key_pressed(g, g->keys.key[WL_ACT_PAUSE])) {
         if (overlay_open) {
             wl_inv_ui_close(g);
             DisableCursor();
         } else if (!p->dead) {
             g->state = WL_STATE_PAUSED;
             EnableCursor();
-            return;
+            pause_now = true;
         }
     }
-    if (IsKeyPressed(g->keys.key[WL_ACT_INVENTORY]) && !p->dead) {
+    if (!pause_now && IsKeyPressed(g->keys.key[WL_ACT_INVENTORY]) && !p->dead) {
         if (overlay_open) {
             wl_inv_ui_close(g);
             DisableCursor();
@@ -1248,25 +1355,25 @@ static void play_frame(WlGame *g)
             EnableCursor();
         }
     }
-    if (IsKeyPressed(g->keys.key[WL_ACT_DEBUG])) g->cfg.show_debug_info = !g->cfg.show_debug_info;
-    if (IsKeyPressed(g->keys.key[WL_ACT_SCREENSHOT])) {
-        char path[WL_PATH_MAX];
-        wl_path_screenshots(path, sizeof(path),
-                            TextFormat("wildlands-%ld.png", (long)time(NULL)));
-        TakeScreenshot(path);
-        WL_LOGI("screenshot saved: %s", path);
-    }
     if (p->dead) {
         g->overlay = WL_OVERLAY_DEATH;
+        /* survival: drop the whole inventory into the world exactly once
+         * per death (creative keeps it). Partial failures retry next
+         * frame with only the remaining stacks, so nothing is lost or
+         * duplicated. */
+        if (!g->death_dropped &&
+            wl_world_gamemode(g->world) == WL_WORLD_GAMEMODE_SURVIVAL)
+            g->death_dropped = wl_game_drop_inventory(g);
         if (IsKeyPressed(KEY_R)) {
             wl_player_respawn(p, g->spawn);
             g->overlay = WL_OVERLAY_NONE;
+            g->death_dropped = false;
         }
     } else if (g->overlay == WL_OVERLAY_DEATH) {
         g->overlay = WL_OVERLAY_NONE;
     }
 
-    bool input_active = !overlay_open && !p->dead;
+    bool input_active = !overlay_open && !p->dead && !pause_now;
 
     /* hotbar */
     if (input_active) {
@@ -1284,6 +1391,19 @@ static void play_frame(WlGame *g)
         }
 
         Vector2 md = GetMouseDelta();
+
+        /* raylib's EnableCursor()/DisableCursor() both warp the cursor to
+         * the window center; the first deltas after such a warp ARE the
+         * warp, and applying them would snap the camera in a random
+         * direction whenever a menu closes. Swallow them. */
+        bool cursor_hidden = IsCursorHidden();
+        if (cursor_hidden != g->cursor_hidden_last) g->look_guard = 2;
+        g->cursor_hidden_last = cursor_hidden;
+        if (g->look_guard > 0) {
+            md.x = 0.0f;
+            md.y = 0.0f;
+            g->look_guard--;
+        }
         wl_player_apply_look(p, md.x, md.y);
 
         /* scripted camera motion (--lookspin/--looknod): synthetic deltas
@@ -1307,28 +1427,32 @@ static void play_frame(WlGame *g)
     }
     if (g->item_toast > 0.0f) g->item_toast -= dt;
 
-    /* simulation */
-    if (g->demo_walk) wl_keybinds_debug_hold(WL_ACT_FORWARD, true);
-    wl_player_update(p, g->world, &g->keys, &g->cfg, &g->audio, dt, input_active,
-                     wl_world_gamemode(g->world));
-    if (!p->dead) {
-        int act = wl_interact_update(p, g->world, &g->cfg, &g->audio, dt, input_active);
-        if (act == WL_INTERACT_OPEN_CRAFT && input_active) {
-            wl_inv_open_craft(&p->inv, 3);
-            g->overlay = WL_OVERLAY_CRAFTING;
-            EnableCursor();
+    /* simulation (skipped entirely on the frame that opens the pause
+     * menu; paused_frame keeps the world frozen from the next frame on) */
+    if (!pause_now) {
+        if (g->demo_walk) wl_keybinds_debug_hold(WL_ACT_FORWARD, true);
+        wl_player_update(p, g->world, &g->keys, &g->cfg, &g->audio, dt, input_active,
+                         wl_world_gamemode(g->world));
+        if (!p->dead) {
+            int act = wl_interact_update(p, g->world, &g->cfg, &g->audio, dt, input_active);
+            if (act == WL_INTERACT_OPEN_CRAFT && input_active) {
+                wl_inv_open_craft(&p->inv, 3);
+                g->overlay = WL_OVERLAY_CRAFTING;
+                EnableCursor();
+            }
         }
-    }
-    wl_world_advance_time(g->world, dt);
-    wl_world_update(g->world, p->pos.x, p->pos.z);
-    wl_audio_update(&g->audio, dt, wl_world_time(g->world), true);
+        wl_world_advance_time(g->world, dt);
+        wl_world_update(g->world, p->pos.x, p->pos.z);
+        wl_world_update_drops(g->world, p, dt);
+        wl_audio_update(&g->audio, dt, wl_world_time(g->world), true);
 
-    /* autosave */
-    g->autosave_timer += dt;
-    if (g->cfg.autosave_interval > 0 &&
-        g->autosave_timer >= (double)g->cfg.autosave_interval) {
-        g->autosave_timer = 0.0;
-        wl_game_save_session(g);
+        /* autosave */
+        g->autosave_timer += dt;
+        if (g->cfg.autosave_interval > 0 &&
+            g->autosave_timer >= (double)g->cfg.autosave_interval) {
+            g->autosave_timer = 0.0;
+            wl_game_save_session(g);
+        }
     }
 
     /* draw */
@@ -1337,6 +1461,8 @@ static void play_frame(WlGame *g)
     BeginDrawing();
     wl_renderer_draw_world(&g->rend, g->world, &g->cfg, wl_world_time(g->world),
                            p->head_in_water);
+    wl_renderer_draw_drops(&g->rend, g->world, wl_world_time(g->world));
+    if (!p->dead) wl_renderer_draw_held_item(&g->rend, p);
     wl_hud_draw(g);
     wl_inv_ui_draw(g);
     uitest_maybe_shot(g);
@@ -1372,6 +1498,8 @@ static void paused_frame(WlGame *g)
     BeginDrawing();
     wl_renderer_draw_world(&g->rend, g->world, &g->cfg, wl_world_time(g->world),
                            g->player.head_in_water);
+    wl_renderer_draw_drops(&g->rend, g->world, wl_world_time(g->world));
+    if (!g->player.dead) wl_renderer_draw_held_item(&g->rend, &g->player);
     wl_hud_draw(g);
     wl_menu_pause(g);
     uitest_maybe_shot(g);
@@ -1400,6 +1528,18 @@ void wl_game_run_frame(WlGame *g)
     }
 
     wl_ui_begin(&g->ui, g->assets, &g->cfg);
+
+    /* global utility keys work in every state (F3 debug overlay, F2
+     * screenshot — capturing the pause menu or overlays must work too) */
+    if (g->world && wl_game_key_pressed(g, g->keys.key[WL_ACT_DEBUG]))
+        g->cfg.show_debug_info = !g->cfg.show_debug_info;
+    if (g->world && wl_game_key_pressed(g, g->keys.key[WL_ACT_SCREENSHOT])) {
+        char path[WL_PATH_MAX];
+        wl_path_screenshots(path, sizeof(path),
+                            TextFormat("wildlands-%ld.png", (long)time(NULL)));
+        TakeScreenshot(path);
+        WL_LOGI("screenshot saved: %s", path);
+    }
 
     /* menu states present their own frame (the in-game states wrap their
      * drawing in BeginDrawing/EndDrawing internally) */
@@ -1460,8 +1600,10 @@ void wl_game_run_frame(WlGame *g)
         return;
     }
     if (g->state != WL_STATE_PLAYING && g->state != WL_STATE_LOADING &&
-        g->demo_frames > 0) {
-        /* in-game demo only runs the play state; menus mean something broke */
+        g->state != WL_STATE_PAUSED && g->demo_frames > 0) {
+        /* in-game demo runs play/loading/pause only; other menus mean
+         * something broke. PAUSED is legitimate (ESC via real or scripted
+         * input) and freezes the frame budget until resumed. */
         g->demo_frames = 0;
         g->quit = true;
     }

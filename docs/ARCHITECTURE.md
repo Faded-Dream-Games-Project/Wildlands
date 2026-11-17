@@ -46,8 +46,10 @@ wl_game_run_frame
   |       player_update     (input -> physics -> survival stats)
   |       interact_update   (raycast, mining progress, placement)
   |       world_update      (stream chunks, adopt generated, budget meshes)
+  |       world_update_drops (drop physics + player pickup)
   |       renderer_begin    (camera from player, sky colors, fog)
   |       renderer_draw_world (sky -> sun/moon -> chunks -> clouds -> water)
+  |       renderer_draw_drops + draw_held_item (depth-cleared, camera space)
   |       hud + overlays
   |-- wl_ui_end
 ```
@@ -95,6 +97,18 @@ wl_game_run_frame
   white / untextured after moving the mouse" bug; `WL_NO_DEPTHCLEAR=1`
   restores the old behaviour for A/B regression runs
   (`tools/repro_render.sh`, `tools/verify_battery.sh`).
+
+## Dropped items
+
+- Death in survival moves every stack (hotbar, main inventory, crafting
+  grid, cursor) into `WlDrop` entities at the player position, cleared
+  only after the entity exists — a full drop list retries the rest next
+  frame, so nothing is lost or duplicated. Creative keeps the inventory.
+- Drops fall with simple gravity + ground clamp, spin/bob when rendered,
+  and are collected by walking within 1.4 blocks (`wl_inv_add_partial`
+  keeps whatever does not fit in the world).
+- Persisted as `drops.dat` (one line per stack) with each session save;
+  old worlds without the file simply load zero drops.
 
 ## Persistence
 
