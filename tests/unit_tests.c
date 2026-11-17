@@ -14,7 +14,11 @@
 #include "wl/world_store.h"
 #include "wl/chunk.h"
 #include "wl/tiles.h"
+#include "wl/mesher.h"
+#include "wl/frustum.h"
+#include "wl/ui.h"
 #include "raylib.h" /* key codes for keybind roundtrip */
+#include "raymath.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -380,6 +384,123 @@ static void test_tiles_contract(void)
     CHECK(TILE_BASE_COUNT == 56);
 }
 
+static void test_tile_uv(void)
+{
+    /* atlas tile UVs: half-texel inset (no bleeding from neighbouring
+     * tiles), each tile strictly inside its atlas cell */
+    float e = 0.5f / ((float)WL_ATLAS_GRID * (float)WL_TILE_PX);
+    float u0, v0, u1, v1;
+
+    wl_tile_uv(0, &u0, &v0, &u1, &v1);
+    CHECK(u0 == e && v0 == e);
+    CHECK(u1 == 1.0f / WL_ATLAS_GRID - e);
+    CHECK(v1 == 1.0f / WL_ATLAS_GRID - e);
+
+    wl_tile_uv(1, &u0, &v0, &u1, &v1);
+    CHECK(u0 == 1.0f / WL_ATLAS_GRID + e);
+    CHECK(u1 == 2.0f / WL_ATLAS_GRID - e);
+
+    bool ok = true;
+    for (int t = 0; t < 256; t++) {
+        wl_tile_uv(t, &u0, &v0, &u1, &v1);
+        int col = t % WL_ATLAS_GRID, row = t / WL_ATLAS_GRID;
+        if (!(u1 > u0 && v1 > v0)) ok = false;
+        if (!(u0 >= (float)col / WL_ATLAS_GRID &&
+              u1 <= (float)(col + 1) / WL_ATLAS_GRID)) ok = false;
+        if (!(v0 >= (float)row / WL_ATLAS_GRID &&
+              v1 <= (float)(row + 1) / WL_ATLAS_GRID)) ok = false;
+    }
+    CHECK(ok);
+}
+
+static void test_frustum(void)
+{
+    /* identity-ish view: camera at the origin looking down -Z, up +Y.
+     * Symmetric 90-degree fov (horizontal and vertical), near 1, far 100. */
+    Matrix view = MatrixLookAt((Vector3){ 0, 0, 0 }, (Vector3){ 0, 0, -1 },
+                               (Vector3){ 0, 1, 0 });
+    Matrix proj = MatrixFrustum(-1, 1, -1, 1, 1, 100);
+    Vector4 f[6];
+    wl_frustum_extract(&view, &proj, f);
+
+    CHECK(wl_frustum_aabb_visible(f, 0, 0, -50, 16, 128, -34));        /* ahead */
+    CHECK(!wl_frustum_aabb_visible(f, 0, 0, 34, 16, 128, 50));         /* behind */
+    CHECK(!wl_frustum_aabb_visible(f, 300, 0, -200, 316, 128, -184));  /* right of fov */
+    CHECK(!wl_frustum_aabb_visible(f, 0, 300, -50, 16, 328, -34));     /* above fov */
+    CHECK(!wl_frustum_aabb_visible(f, 0, 0, -150, 16, 128, -134));     /* beyond far */
+    CHECK(!wl_frustum_aabb_visible(f, 0, 0, -0.9f, 16, 128, -0.5f));   /* before near */
+    CHECK(wl_frustum_aabb_visible(f, 16, 16, -50, 32, 32, -34));       /* diagonal */
+    CHECK(wl_frustum_aabb_visible(f, 0, 0, -50, 116, 128, -34));       /* straddling */
+
+    /* a game-like camera (fov 75, 16:9, raylib near/far) above ground */
+    Vector3 eye = { 8, 80, 8 };
+    view = MatrixLookAt(eye, (Vector3){ eye.x, eye.y, eye.z - 1 },
+                        (Vector3){ 0, 1, 0 });
+    proj = MatrixFrustum(-0.01366f, 0.01366f, -0.00767f, 0.00767f, 0.01f, 1000.0f);
+    wl_frustum_extract(&view, &proj, f);
+    CHECK(wl_frustum_aabb_visible(f, 0, 0, -16, 16, 128, 0));            /* chunk ahead */
+    CHECK(wl_frustum_aabb_visible(f, 16, 0, -80, 32, 128, -64));         /* ahead-right */
+    CHECK(!wl_frustum_aabb_visible(f, 0, 0, 16, 16, 128, 32));           /* chunk behind */
+    CHECK(!wl_frustum_aabb_visible(f, -800, 0, 800, -784, 128, 816));    /* behind-left */
+
+    /* turning 90 degrees to +X must flip which chunks are visible */
+    view = MatrixLookAt(eye, (Vector3){ eye.x + 1, eye.y, eye.z },
+                        (Vector3){ 0, 1, 0 });
+    wl_frustum_extract(&view, &proj, f);
+    CHECK(wl_frustum_aabb_visible(f, 80, 0, -16, 96, 128, 0));           /* now ahead */
+    CHECK(!wl_frustum_aabb_visible(f, -96, 0, -80, -80, 128, -64));      /* now behind-left */
+}
+
+static void test_textfield_edit(void)
+{
+    char buf[16];
+    int caret;
+    bool changed;
+
+    /* typing appends at the caret */
+    wl_scpy(buf, "hello", sizeof(buf)); caret = 5;
+    changed = wl_ui_textfield_edit(buf, sizeof(buf), &caret, "!", 0, 0, 0, 0, 0, 0);
+    CHECK(changed && wl_str_eq(buf, "hello!") && caret == 6);
+
+    /* backspace deletes AT the caret, not only at the end */
+    wl_scpy(buf, "hello", sizeof(buf)); caret = 2;
+    wl_ui_textfield_edit(buf, sizeof(buf), &caret, "", 1, 0, 0, 0, 0, 0);
+    CHECK(wl_str_eq(buf, "hllo") && caret == 1);
+
+    /* delete removes the character right of the caret */
+    wl_scpy(buf, "hello", sizeof(buf)); caret = 1;
+    wl_ui_textfield_edit(buf, sizeof(buf), &caret, "", 0, 1, 0, 0, 0, 0);
+    CHECK(wl_str_eq(buf, "hllo") && caret == 1);
+
+    /* insertion in the middle */
+    wl_scpy(buf, "hllo", sizeof(buf)); caret = 1;
+    wl_ui_textfield_edit(buf, sizeof(buf), &caret, "e", 0, 0, 0, 0, 0, 0);
+    CHECK(wl_str_eq(buf, "hello") && caret == 2);
+
+    /* caret movement: right at the end stays, left moves, home/end jump */
+    wl_scpy(buf, "hello", sizeof(buf)); caret = 5;
+    wl_ui_textfield_edit(buf, sizeof(buf), &caret, "", 0, 0, 0, 1, 0, 0);
+    CHECK(caret == 5);
+    wl_ui_textfield_edit(buf, sizeof(buf), &caret, "", 0, 0, 1, 0, 0, 0);
+    CHECK(caret == 4);
+    wl_ui_textfield_edit(buf, sizeof(buf), &caret, "", 0, 0, 0, 0, 1, 0);
+    CHECK(caret == 0);
+    wl_ui_textfield_edit(buf, sizeof(buf), &caret, "X", 0, 0, 0, 0, 0, 0);
+    CHECK(wl_str_eq(buf, "Xhello") && caret == 1);
+    wl_ui_textfield_edit(buf, sizeof(buf), &caret, "", 0, 0, 0, 0, 0, 1);
+    CHECK(caret == 6);
+
+    /* nothing to do: reports no change */
+    wl_scpy(buf, "hello", sizeof(buf)); caret = 3;
+    changed = wl_ui_textfield_edit(buf, sizeof(buf), &caret, "", 0, 0, 0, 0, 0, 0);
+    CHECK(!changed && wl_str_eq(buf, "hello") && caret == 3);
+
+    /* capacity is respected: the buffer never overflows its NUL */
+    wl_scpy(buf, "012345678901234", sizeof(buf)); caret = 15;
+    changed = wl_ui_textfield_edit(buf, sizeof(buf), &caret, "xyz", 0, 0, 0, 0, 0, 0);
+    CHECK(!changed && strlen(buf) == 15);
+}
+
 int main(void)
 {
     test_util();
@@ -393,6 +514,9 @@ int main(void)
     test_keybinds();
     test_world_store();
     test_tiles_contract();
+    test_tile_uv();
+    test_frustum();
+    test_textfield_edit();
 
     printf("unit tests: %d run, %d failed\r\n", tests_run, tests_failed);
     return tests_failed ? 1 : 0;

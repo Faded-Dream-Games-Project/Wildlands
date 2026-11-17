@@ -715,6 +715,12 @@ void par_shapes_merge(par_shapes_mesh* dst, par_shapes_mesh const* src)
 par_shapes_mesh* par_shapes_create_disk(float radius, int slices,
     float const* center, float const* normal)
 {
+    /* Wildlands patch: reject slice counts that would make the point and
+     * triangle counts negative (they flow into malloc sizes, which GCC 14
+     * flags with -Walloc-size-larger-than; a negative count previously
+     * allocated a huge block). A disk needs at least 3 slices. */
+    if (slices < 3)
+        return 0;
     par_shapes_mesh* mesh = PAR_CALLOC(par_shapes_mesh, 1);
     mesh->npoints = slices + 1;
     mesh->points = PAR_MALLOC(float, 3 * mesh->npoints);

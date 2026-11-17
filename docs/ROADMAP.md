@@ -15,6 +15,14 @@ unless the code for it ships in this repository.
 - Timing instrumentation: frame avg/worst (F3), chunk generation and
   meshing times, RSS; ASAN-clean with no leaks in game code
 - Headless support: `make run` auto-starts Xvfb with software GL
+- Correct frustum culling (proj*view built explicitly — raymath's
+  MatrixMultiply computes B*A) plus fog-range chunk culling; distant
+  terrain renders at any render distance (verified 4 directions)
+- Scrolling menu lists (settings/world creation) that clip to their panel,
+  dropdown lists drawn above other controls with click-through blocking,
+  text fields with caret editing — all covered by `--uitest` (25 checks)
+- Vendored-library patches documented in docs/THIRD_PARTY_PATCHES.md
+  (m3d index decode, par_shapes disk guard)
 
 ### Engine
 - Chunk-based voxel world (16×16×128), hash-map storage, streaming with

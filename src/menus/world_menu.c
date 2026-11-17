@@ -166,56 +166,72 @@ void wl_menu_world_create(WlGame *g)
     Vector2 ts = MeasureTextEx(tf, title, fs, 2.0f);
     DrawTextEx(tf, title, (Vector2){ (sw - ts.x) / 2, 34 * g->ui.scale }, fs, 2.0f, WHITE);
 
-    float pw = 460 * g->ui.scale;
-    float ph = 400 * g->ui.scale;
-    Rectangle panel = { (sw - pw) / 2, 100 * g->ui.scale, pw, ph };
+    float s = g->ui.scale;
+    float pw = 460 * s;
+    /* four label(34) + control(44) groups with 16 px gaps; the action
+     * buttons are pinned to the panel bottom so they can never overlap
+     * the last control */
+    float content_h = (4.0f * (34.0f + 44.0f) + 3.0f * 16.0f) * s;
+    float btn_h = 46 * s, pad = 24 * s;
+    float ph = pad + content_h + 16 * s + btn_h + pad;
+    float max_ph = GetScreenHeight() - 108 * s - 8; /* keep the title visible */
+    if (ph > max_ph) ph = max_ph;
+    Rectangle panel = { (sw - pw) / 2, 100 * s, pw, ph };
     wl_ui_panel(&g->ui, panel);
 
-    float x = panel.x + 24 * g->ui.scale;
-    float y = panel.y + 24 * g->ui.scale;
-    float w = panel.width - 48 * g->ui.scale;
-    float h = 44 * g->ui.scale;
+    /* scrolling content: at large UI scales / small windows the groups
+     * scroll instead of running off the screen */
+    Rectangle viewport = { panel.x + 24 * s, panel.y + pad,
+                           pw - 48 * s, ph - pad - 16 * s - btn_h - pad };
+    if (viewport.height < 60) viewport.height = 60;
+    wl_ui_scroll_begin(&g->ui, viewport, content_h, &g->menus.create_scroll);
 
-    wl_ui_label(&g->ui, (Rectangle){ x, y, w, 28 * g->ui.scale },
+    float x = panel.x + 24 * s;
+    float y = viewport.y - g->menus.create_scroll;
+    float w = pw - 48 * s;
+    float h = 44 * s;
+
+    wl_ui_label(&g->ui, (Rectangle){ x, y, w, 28 * s },
                 "World Name", (Color){ 200, 206, 214, 255 }, false);
-    y += 34 * g->ui.scale;
+    y += 34 * s;
     wl_ui_textfield(&g->ui, 1001, (Rectangle){ x, y, w, h },
                     g->menus.new_name, sizeof(g->menus.new_name));
-    y += h + 16 * g->ui.scale;
+    y += h + 16 * s;
 
-    wl_ui_label(&g->ui, (Rectangle){ x, y, w, 28 * g->ui.scale },
+    wl_ui_label(&g->ui, (Rectangle){ x, y, w, 28 * s },
                 "Seed (blank = random)", (Color){ 200, 206, 214, 255 }, false);
-    y += 34 * g->ui.scale;
+    y += 34 * s;
     wl_ui_textfield(&g->ui, 1002, (Rectangle){ x, y, w, h },
                     g->menus.new_seed, sizeof(g->menus.new_seed));
-    y += h + 16 * g->ui.scale;
+    y += h + 16 * s;
 
     static const char *gmodes[] = { "Survival", "Creative" };
     static const char *wtypes[] = { "Standard", "Superflat" };
 
-    wl_ui_label(&g->ui, (Rectangle){ x, y, w, 28 * g->ui.scale },
+    wl_ui_label(&g->ui, (Rectangle){ x, y, w, 28 * s },
                 "Game Mode", (Color){ 200, 206, 214, 255 }, false);
-    y += 34 * g->ui.scale;
+    y += 34 * s;
     wl_ui_dropdown(&g->ui, (Rectangle){ x, y, w, h }, &g->menus.new_gamemode,
                    gmodes, 2);
-    y += h + 16 * g->ui.scale;
+    y += h + 16 * s;
 
-    wl_ui_label(&g->ui, (Rectangle){ x, y, w, 28 * g->ui.scale },
+    wl_ui_label(&g->ui, (Rectangle){ x, y, w, 28 * s },
                 "World Type", (Color){ 200, 206, 214, 255 }, false);
-    y += 34 * g->ui.scale;
+    y += 34 * s;
     wl_ui_dropdown(&g->ui, (Rectangle){ x, y, w, h }, &g->menus.new_type,
                    wtypes, 2);
+    wl_ui_scroll_end(&g->ui);
 
-    /* buttons */
-    Rectangle b = { panel.x + 24 * g->ui.scale, panel.y + ph - 64 * g->ui.scale,
-                    (pw - 72 * g->ui.scale) / 2, 46 * g->ui.scale };
+    /* buttons pinned below the scroll area */
+    Rectangle b = { panel.x + 24 * s, panel.y + ph - pad - btn_h,
+                    (pw - 72 * s) / 2, btn_h };
     bool ok = g->menus.new_name[0] != '\0';
     if (wl_ui_button(&g->ui, b, ok ? "Create World" : "Name required")) {
         if (ok) {
             uint64_t seed = 0;
             if (g->menus.new_seed[0] != '\0') {
-                long s;
-                if (wl_parse_long(g->menus.new_seed, &s)) seed = (uint64_t)s;
+                long parsed;
+                if (wl_parse_long(g->menus.new_seed, &parsed)) seed = (uint64_t)parsed;
             }
             WlWorldEntry entry;
             if (wl_worlds_create(g->menus.new_name, seed, g->menus.new_type,

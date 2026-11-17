@@ -1,5 +1,6 @@
 /* renderer.c — the frame's 3D pass: sky, sun/moon, chunks, clouds, water. */
 #include "wl/renderer.h"
+#include "wl/frustum.h"
 #include "wl/world.h"
 #include "wl/player.h"
 #include "wl/config.h"
@@ -69,51 +70,38 @@ static void sky_at(uint32_t ticks, Color *top, Color *horizon, float *light)
 
 static void extract_frustum(WlRenderer *r)
 {
+    /* BeginMode3D sets modelview = camera view and projection = frustum;
+     * the combined clip matrix must be proj * view. (raymath's
+     * MatrixMultiply(A, B) computes B*A, so wl_frustum_extract builds the
+     * product explicitly.) */
     Matrix view = rlGetMatrixModelview();
     Matrix proj = rlGetMatrixProjection();
-    Matrix m = MatrixMultiply(proj, view);
-
-    float mm[16] = {
-        m.m0, m.m4, m.m8,  m.m12,
-        m.m1, m.m5, m.m9,  m.m13,
-        m.m2, m.m6, m.m10, m.m14,
-        m.m3, m.m7, m.m11, m.m15,
-    };
-
-    /* planes from combined matrix rows (Gribb-Hartmann) */
-    const int rows[6][2] = {
-        { 3, 0 }, { 3, 1 }, { 3, 2 }, { 3, 0 }, { 3, 1 }, { 3, 2 }
-    };
-    const float signs[6] = { 1, 1, 1, -1, -1, -1 };
-    for (int p = 0; p < 6; p++) {
-        float a = mm[rows[p][0] * 4 + 0] + signs[p] * mm[rows[p][1] * 4 + 0];
-        float b = mm[rows[p][0] * 4 + 1] + signs[p] * mm[rows[p][1] * 4 + 1];
-        float c = mm[rows[p][0] * 4 + 2] + signs[p] * mm[rows[p][1] * 4 + 2];
-        float d = mm[rows[p][0] * 4 + 3] + signs[p] * mm[rows[p][1] * 4 + 3];
-        float len = sqrtf(a * a + b * b + c * c);
-        if (len > 1e-8f) { a /= len; b /= len; c /= len; d /= len; }
-        r->frustum[p] = (Vector4){ a, b, c, d };
-    }
+    wl_frustum_extract(&view, &proj, r->frustum);
 }
 
 static bool chunk_in_frustum(const WlRenderer *r, int cx, int cz)
 {
     float x0 = (float)(cx * WL_CHUNK_W);
     float z0 = (float)(cz * WL_CHUNK_W);
-    float x1 = x0 + WL_CHUNK_W;
-    float y1 = (float)WL_CHUNK_H;
-    float z1 = z0 + WL_CHUNK_W;
+    return wl_frustum_aabb_visible(r->frustum, x0, 0.0f, z0,
+                                   x0 + WL_CHUNK_W, (float)WL_CHUNK_H,
+                                   z0 + WL_CHUNK_W);
+}
 
-    for (int p = 0; p < 6; p++) {
-        Vector4 pl = r->frustum[p];
-        /* positive vertex: the AABB corner farthest along the plane normal */
-        float px = pl.x >= 0 ? x1 : x0;
-        float py = pl.y >= 0 ? y1 : 0.0f;
-        float pz = pl.z >= 0 ? z1 : z0;
-        if (pl.x * px + pl.y * py + pl.z * pz + pl.w < 0.0f)
-            return false;
-    }
-    return true;
+/* Chunks entirely beyond the fog range are drawn as pure fog color —
+ * skipping them is visually identical and saves the fill cost. */
+static bool chunk_beyond_fog(const WlRenderer *r, int cx, int cz)
+{
+    float x0 = (float)(cx * WL_CHUNK_W);
+    float z0 = (float)(cz * WL_CHUNK_W);
+    float x1 = x0 + WL_CHUNK_W;
+    float z1 = z0 + WL_CHUNK_W;
+    Vector3 c = r->cam.position;
+    float nx = c.x < x0 ? x0 : (c.x > x1 ? x1 : c.x);
+    float ny = c.y < 0.0f ? 0.0f : (c.y > (float)WL_CHUNK_H ? (float)WL_CHUNK_H : c.y);
+    float nz = c.z < z0 ? z0 : (c.z > z1 ? z1 : c.z);
+    float dx = c.x - nx, dy = c.y - ny, dz = c.z - nz;
+    return dx * dx + dy * dy + dz * dz > r->fog_far * r->fog_far;
 }
 
 /* ------------------------------------------------------------------ */
@@ -330,6 +318,7 @@ void wl_renderer_draw_world(WlRenderer *r, WlWorld *w, const WlConfig *cfg,
         WlChunk *c = (WlChunk *)list[i];
         if (!c->generated || !c->mesh_opaque.valid) continue;
         if (!chunk_in_frustum(r, c->cx, c->cz)) continue;
+        if (chunk_beyond_fog(r, c->cx, c->cz)) continue;
         Matrix tf = MatrixTranslate((float)(c->cx * WL_CHUNK_W), 0.0f,
                                     (float)(c->cz * WL_CHUNK_W));
         DrawMesh(c->mesh_opaque.mesh, r->mat_opaque, tf);
@@ -357,6 +346,7 @@ void wl_renderer_draw_world(WlRenderer *r, WlWorld *w, const WlConfig *cfg,
         WlChunk *c = (WlChunk *)list[i];
         if (!c->generated || !c->mesh_transparent.valid) continue;
         if (!chunk_in_frustum(r, c->cx, c->cz)) continue;
+        if (chunk_beyond_fog(r, c->cx, c->cz)) continue;
         Matrix tf = MatrixTranslate((float)(c->cx * WL_CHUNK_W), 0.0f,
                                     (float)(c->cz * WL_CHUNK_W));
         DrawMesh(c->mesh_transparent.mesh, r->mat_water, tf);

@@ -2309,6 +2309,12 @@ _inline static unsigned char *_m3d_getidx(unsigned char *data, char type, M3D_IN
         case 1: *idx = data[0] > 253 ? (int8_t)data[0] : data[0]; data++; break;
         case 2: *idx = *((uint16_t*)data) > 65533 ? *((int16_t*)data) : *((uint16_t*)data); data += 2; break;
         case 4: *idx = *((int32_t*)data); data += 4; break;
+        /* Wildlands patch: an index size byte of 0 or 3 (malformed file)
+         * used to fall through WITHOUT writing *idx, leaving the caller's
+         * variable uninitialized (GCC -Wmaybe-uninitialized, e.g. the
+         * voxel decoder at model->voxel[i].data[j++] = (M3D_VOXEL)mi).
+         * Decoding an index of invalid size now yields 0. */
+        default: *idx = 0; break;
     }
     return data;
 }

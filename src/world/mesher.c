@@ -24,10 +24,14 @@ void wl_tile_uv(int tile, float *u0, float *v0, float *u1, float *v1)
     int col = t % WL_ATLAS_GRID;
     int row = t / WL_ATLAS_GRID;
     float s = 1.0f / (float)WL_ATLAS_GRID;
-    if (u0) *u0 = (float)col * s;
-    if (u1) *u1 = (float)(col + 1) * s;
-    if (v0) *v0 = (float)row * s;
-    if (v1) *v1 = (float)(row + 1) * s;
+    /* half-texel inset: the atlas has no padding between tiles, so UVs on
+     * an exact tile boundary can sample the neighbouring tile's edge
+     * texel and draw glitched seams */
+    float e = 0.5f / ((float)WL_ATLAS_GRID * (float)WL_TILE_PX);
+    if (u0) *u0 = (float)col * s + e;
+    if (u1) *u1 = (float)(col + 1) * s - e;
+    if (v0) *v0 = (float)row * s + e;
+    if (v1) *v1 = (float)(row + 1) * s - e;
 }
 
 /* ------------------------------------------------------------------ */

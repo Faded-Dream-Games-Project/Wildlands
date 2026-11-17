@@ -15,6 +15,7 @@
 #include <string.h>
 #include <math.h>
 #include <time.h>
+#include "rlgl.h"
 
 /* ------------------------------------------------------------------ */
 /* argument parsing (demo/test automation)                             */
@@ -51,6 +52,17 @@ static void parse_args(WlGame *g, int argc, char **argv)
             g->demo_overlay = wl_str_eq(argv[++i], "craft") ? 3 : 2;
         } else if (wl_str_eq(argv[i], "--selftest")) {
             g->selftest = true;
+        } else if (wl_str_eq(argv[i], "--uitest") && i + 1 < argc) {
+            g->uitest = wl_str_eq(argv[++i], "create") ? 2 : 1;
+        } else if (wl_str_eq(argv[i], "--yaw") && i + 1 < argc) {
+            g->demo_dir_set = true;
+            g->demo_yaw = (float)atof(argv[++i]) * 0.017453293f;
+        } else if (wl_str_eq(argv[i], "--pitch") && i + 1 < argc) {
+            g->demo_dir_set = true;
+            float p = (float)atof(argv[++i]) * 0.017453293f;
+            if (p > 1.55f) p = 1.55f;
+            if (p < -1.55f) p = -1.55f;
+            g->demo_pitch = p;
         } else if (wl_str_eq(argv[i], "--help") || wl_str_eq(argv[i], "-h")) {
             printf("Wildlands %s\n"
                    "  --world <name>        play this world (created if missing)\n"
@@ -62,7 +74,9 @@ static void parse_args(WlGame *g, int argc, char **argv)
                    "  --width/--height <n>  window size override\n"
                    "  --menu <screen>       test: show menu (main|worlds|create|settings)\n"
                    "  --overlay <inv|craft> test: open the inventory overlay in-world\n"
-                   "  --selftest            runtime self test: mine/place/save/exit\n",
+                   "  --selftest            runtime self test: mine/place/save/exit\n"
+                   "  --uitest <s>          UI test: settings | create\n"
+                   "  --yaw/--pitch <deg>   demo camera direction at world entry\n",
                    WL_VERSION_STRING);
             exit(0);
         }
@@ -238,6 +252,15 @@ bool wl_game_init(WlGame *g, int argc, char **argv)
     stage_done("renderer", t);
 
     /* --- 8. entry point for demos/tests --- */
+    if (g->uitest) {
+        g->demo_menu = true;
+        wl_scpy(g->demo_start_menu, g->uitest == 2 ? "create" : "settings",
+                sizeof(g->demo_start_menu));
+        g->uitest_cfg = g->cfg; /* restored when the UI test finishes */
+        if (g->uitest == 2) wl_worlds_delete("My World"); /* reproducible */
+        WL_LOGI("UITEST: begin (%s)",
+                g->uitest == 2 ? "world creation" : "settings menu");
+    }
     if (g->demo_menu) {
         if (wl_str_eq(g->demo_start_menu, "worlds") ||
             wl_str_eq(g->demo_start_menu, "create")) {
@@ -603,6 +626,269 @@ static void run_selftest(WlGame *g)
     g->quit = true;
 }
 
+/* renderer flush + deferred screenshot (--uitest captures mid-frame, so
+ * the queued shot shows exactly what this frame presents) */
+static void uitest_maybe_shot(WlGame *g)
+{
+    if (g->uitest_shot[0] == '\0') return;
+    rlDrawRenderBatchActive();
+    TakeScreenshot(g->uitest_shot);
+    g->uitest_shot[0] = '\0';
+}
+
+/* ------------------------------------------------------------------ */
+/* UI runtime test (--uitest): drives the real menus through the       */
+/* wl_ui_debug_input seam, with logged assertions.                     */
+/* ------------------------------------------------------------------ */
+
+static void uitest_check(WlGame *g, const char *name, bool ok)
+{
+    WL_LOGI("UITEST %-4s %s", ok ? "PASS" : "FAIL", name);
+    if (!ok) g->uitest_failed = true;
+}
+
+static void uitest_finish(WlGame *g)
+{
+    /* restore any settings the test touched, then stop */
+    g->cfg = g->uitest_cfg;
+    wl_game_apply_settings(g);
+    wl_game_save_config(g);
+    wl_ui_debug_input(false, 0, 0, false, false, 0, NULL);
+    WL_LOGI("UITEST %s", g->uitest_failed ? "FAILED" : "PASSED");
+    g->uitest = 0;
+    g->quit = true;
+}
+
+static void uitest_settings(WlGame *g)
+{
+    float s = g->ui.scale;
+    int sw = GetScreenWidth();
+    float pw = 640 * s;
+    float panel_x = (sw - pw) / 2, panel_y = 76 * s;
+    float ph = 520 * s; /* mirrors the settings menu layout */
+    float max_ph = (float)GetScreenHeight() - panel_y - 8;
+    if (ph > max_ph) ph = max_ph;
+    float tabs_y = panel_y + 12 * s;
+    float area_y = tabs_y + 56 * s;
+    float area_h = ph - 190 * s;
+    float area_w = pw - 48 * s;
+    float ctrl_cx = panel_x + 24 * s + area_w * 0.55f + area_w * 0.225f;
+    float row_cy = area_y + 20.0f; /* row 0 control center */
+
+    switch (g->uitest_phase) {
+    case 0: /* settle: menu is up */
+        uitest_check(g, "settings screen shown", g->state == WL_STATE_SETTINGS);
+        wl_ui_debug_input(true, 0, 0, false, false, 0, NULL);
+        g->uitest_phase = 1;
+        break;
+    case 1: /* click the resolution dropdown */
+        wl_ui_debug_input(true, ctrl_cx, row_cy, true, true, 0, NULL);
+        g->uitest_phase = 2;
+        break;
+    case 2: /* the list must be open now, on top of the rows below */
+        uitest_check(g, "dropdown list opens", g->ui.overlay_open);
+        wl_scpy(g->uitest_shot, "/tmp/uitest-settings-dd-open.png",
+                sizeof(g->uitest_shot));
+        wl_ui_debug_input(true, ctrl_cx, row_cy, false, false, 0, NULL);
+        g->uitest_phase = 3;
+        break;
+    case 3: /* click where the Fullscreen toggle sits UNDER the list: the
+             * click must pick a list row (row 1), never the toggle
+             * underneath it */
+        wl_ui_debug_input(true, ctrl_cx, row_cy + 2 + 36 * s + 32 * s,
+                          true, true, 0, NULL);
+        g->uitest_phase = 4;
+        break;
+    case 4: /* the click selected list row 1; the toggle must NOT fire */
+        uitest_check(g, "dropdown closes after row click", !g->ui.overlay_open);
+        uitest_check(g, "row under list not activated",
+                     g->cfg.fullscreen == g->uitest_cfg.fullscreen);
+        uitest_check(g, "row click selects that row",
+                     g->res_index == 1 && g->cfg.window_width == 1600);
+        wl_ui_debug_input(true, ctrl_cx, row_cy, true, true, 0, NULL);
+        g->uitest_phase = 5;
+        break;
+    case 5: /* reopened; now click a neutral spot outside the list */
+        uitest_check(g, "dropdown reopens", g->ui.overlay_open);
+        wl_ui_debug_input(true, panel_x + 40, area_y + 300, true, true, 0, NULL);
+        g->uitest_phase = 6;
+        break;
+    case 6: /* closed again; scroll the list to the bottom (wheel down) */
+        uitest_check(g, "click outside closes dropdown", !g->ui.overlay_open);
+        wl_ui_debug_input(true, panel_x + 100, area_y + 100, false, false, -8, NULL);
+        g->uitest_phase = 7;
+        break;
+    case 7: /* scrolled: the View Bobbing row (9) must now be reachable */
+        uitest_check(g, "settings list scrolls", g->settings_scroll > 0.0f);
+        {
+            float vy = area_y + 9 * 52.0f + 20.0f - g->settings_scroll;
+            uitest_check(g, "bottom rows visible in panel",
+                         vy > area_y && vy < area_y + area_h);
+            wl_scpy(g->uitest_shot, "/tmp/uitest-settings-scrolled.png",
+                    sizeof(g->uitest_shot));
+            wl_ui_debug_input(true, ctrl_cx, vy, true, true, 0, NULL);
+        }
+        g->uitest_phase = 8;
+        break;
+    case 8: /* the toggle under the pointer must have flipped */
+        uitest_check(g, "off-panel setting toggleable",
+                     g->cfg.view_bobbing != g->uitest_cfg.view_bobbing);
+        { /* switch to the Controls tab */
+            float tab_w = (pw - 24 * s) / 4;
+            float tx = panel_x + 12 * s + tab_w * 2 + tab_w / 2;
+            wl_ui_debug_input(true, tx, tabs_y + 20 * s, true, true, 0, NULL);
+        }
+        g->uitest_phase = 9;
+        break;
+    case 9:
+        uitest_check(g, "controls tab opens", g->settings_tab == 2);
+        wl_ui_debug_input(true, panel_x + 100, area_y + 100, false, false, -10, NULL);
+        g->uitest_phase = 10;
+        break;
+    case 10: /* all bindings reachable by scrolling */
+        wl_scpy(g->uitest_shot, "/tmp/uitest-settings-controls.png",
+                sizeof(g->uitest_shot));
+        { /* Done button */
+            float bx = panel_x + 16 + (pw - 64 * s) / 8;
+            float by = panel_y + ph - 60 * s + 23 * s;
+            wl_ui_debug_input(true, bx, by, true, true, 0, NULL);
+        }
+        g->uitest_phase = 11;
+        break;
+    case 11:
+        uitest_check(g, "done returns to main menu",
+                     g->state == WL_STATE_MAIN_MENU);
+        uitest_finish(g);
+        break;
+    default:
+        uitest_finish(g);
+        break;
+    }
+}
+
+static void uitest_create(WlGame *g)
+{
+    float s = g->ui.scale;
+    static int s_last_phase = -1;
+    if (s_last_phase != g->uitest_phase) {
+        s_last_phase = g->uitest_phase;
+        WL_LOGD("uitest-create: phase=%d name='%s' seed='%s' focus=%d",
+                g->uitest_phase, g->menus.new_name, g->menus.new_seed,
+                g->ui.focus_textfield);
+    }
+    int sw = GetScreenWidth();
+    float pw = 460 * s;
+    float content_h = (4.0f * (34.0f + 44.0f) + 3.0f * 16.0f) * s;
+    float btn_h = 46 * s, pad = 24 * s;
+    float ph = pad + content_h + 16 * s + btn_h + pad;
+    float sh = GetScreenHeight();
+    float max_ph = sh - 108 * s - 8;
+    if (ph > max_ph) ph = max_ph;
+    float panel_x = (sw - pw) / 2, panel_y = 100 * s;
+    float x = panel_x + 24 * s, w = pw - 48 * s;
+    float cx = x + w / 2;
+    float vy0 = panel_y + pad; /* viewport top (scroll is 0 during test) */
+    /* group stride: label(34) + control(44) + gap(16) */
+    float group_y = vy0 + 34 * s + 22 * s; /* group 0 (name) control center */
+    float wt_y = vy0 + (3 * 94 + 34) * s + 22 * s; /* world type control */
+
+    switch (g->uitest_phase) {
+    case 0: /* settle; start from empty fields (fixture) */
+        uitest_check(g, "create screen shown", g->state == WL_STATE_WORLD_CREATE);
+        g->menus.new_name[0] = '\0';
+        g->menus.new_seed[0] = '\0';
+        g->menus.create_scroll = 0;
+        wl_ui_debug_input(true, 0, 0, false, false, 0, NULL);
+        g->uitest_phase = 1;
+        break;
+    case 1: /* click the world-name field once */
+        wl_ui_debug_input(true, cx, group_y, true, true, 0, NULL);
+        g->uitest_phase = 2;
+        break;
+    case 2: /* focus must SURVIVE the click (regression) */
+        uitest_check(g, "name field keeps focus", g->ui.focus_textfield == 1001);
+        wl_ui_debug_input(true, cx, group_y, false, false, 0, "My World");
+        g->uitest_phase = 3;
+        break;
+    case 3:
+        uitest_check(g, "typed characters appear",
+                     wl_str_eq(g->menus.new_name, "My World"));
+        wl_ui_debug_input(true, cx, group_y + 94 * s, true, true, 0, NULL);
+        g->uitest_phase = 4;
+        break;
+    case 4: /* the seed field must steal focus only because it was clicked */
+        uitest_check(g, "seed field takes focus", g->ui.focus_textfield == 1002);
+        wl_ui_debug_input(true, cx, group_y + 94 * s, false, false, 0, "12345");
+        g->uitest_phase = 5;
+        break;
+    case 5:
+        uitest_check(g, "seed text entered",
+                     wl_str_eq(g->menus.new_seed, "12345"));
+        wl_ui_debug_input(true, cx, wt_y, true, true, 0, NULL);
+        g->uitest_phase = 6;
+        break;
+    case 6: /* world type dropdown: open, and no longer overlapped */
+        uitest_check(g, "world type dropdown opens", g->ui.overlay_open);
+        {
+            Rectangle wt = { x, wt_y - 22 * s, w, 44 * s };
+            Rectangle back = { panel_x + pw / 2 + 12 * s,
+                               panel_y + ph - pad - btn_h,
+                               (pw - 72 * s) / 2, btn_h };
+            uitest_check(g, "back button does not overlap world type",
+                         !CheckCollisionRecs(wt, back));
+        }
+        wl_scpy(g->uitest_shot, "/tmp/uitest-create-dd-open.png",
+                sizeof(g->uitest_shot));
+        wl_ui_debug_input(true, cx, wt_y, false, false, 0, NULL);
+        g->uitest_phase = 7;
+        break;
+    case 7: /* pick "Superflat" (row 1): list starts below the control */
+        wl_ui_debug_input(true, cx, wt_y + 22 * s + 2 + 32 * s * 1.5f,
+                          true, true, 0, NULL);
+        g->uitest_phase = 8;
+        break;
+    case 8:
+        uitest_check(g, "world type selected",
+                     g->menus.new_type == WL_WORLDTYPE_SUPERFLAT);
+        uitest_check(g, "dropdown closed after selection", !g->ui.overlay_open);
+        { /* Create World button */
+            float bx = panel_x + 24 * s + (pw - 72 * s) / 4;
+            float by = panel_y + ph - pad - btn_h / 2;
+            wl_ui_debug_input(true, bx, by, true, true, 0, NULL);
+        }
+        g->uitest_phase = 9;
+        break;
+    case 9: /* the world must be created and load */
+        uitest_check(g, "create world enters loading",
+                     g->state == WL_STATE_LOADING || g->state == WL_STATE_PLAYING);
+        wl_ui_debug_input(true, 0, 0, false, false, 0, NULL);
+        g->uitest_wait = 0;
+        g->uitest_phase = 10;
+        break;
+    case 10: /* wait for the world to finish streaming */
+        if (g->state == WL_STATE_PLAYING || ++g->uitest_wait > 900) {
+            uitest_check(g, "world loads and plays",
+                         g->state == WL_STATE_PLAYING &&
+                         wl_str_eq(wl_world_name(g->world), "My World"));
+            wl_scpy(g->uitest_shot, "/tmp/uitest-create-world.png",
+                    sizeof(g->uitest_shot));
+            uitest_finish(g);
+        } else {
+            wl_ui_debug_input(true, 0, 0, false, false, 0, NULL);
+        }
+        break;
+    default:
+        uitest_finish(g);
+        break;
+    }
+}
+
+static void uitest_frame(WlGame *g)
+{
+    if (g->uitest == 2) uitest_create(g);
+    else uitest_settings(g);
+}
+
 /* ------------------------------------------------------------------ */
 /* per-state frames                                                    */
 /* ------------------------------------------------------------------ */
@@ -629,6 +915,10 @@ static void loading_frame(WlGame *g)
         if (g->player.pos.y < (float)py) g->player.pos.y = (float)py + 0.01f;
 
         g->state = WL_STATE_PLAYING;
+        if (g->demo_dir_set) { /* test automation: fixed camera direction */
+            g->player.yaw = g->demo_yaw;
+            g->player.pitch = g->demo_pitch;
+        }
         if (g->demo_frames <= 0 && !g->selftest) DisableCursor();
 
         /* runtime self test takes over from here */
@@ -671,6 +961,7 @@ static void loading_frame(WlGame *g)
     DrawRectangle(bar_x + 2, bar_y + 2, (int)((bar_w - 4) * frac), 14,
                   (Color){ 106, 170, 64, 255 });
     DrawRectangleLines(bar_x, bar_y, bar_w, 18, (Color){ 70, 76, 86, 255 });
+    uitest_maybe_shot(g);
     EndDrawing();
 
     wl_audio_update(&g->audio, GetFrameTime(), 0, false);
@@ -784,6 +1075,7 @@ static void play_frame(WlGame *g)
                            p->head_in_water);
     wl_hud_draw(g);
     wl_inv_ui_draw(g);
+    uitest_maybe_shot(g);
     EndDrawing();
 
     /* demo diagnostics + frame countdown */
@@ -825,6 +1117,9 @@ void wl_game_run_frame(WlGame *g)
 {
     if (g->quit) return;
 
+    /* UI runtime test: drives the menus through the input seam */
+    if (g->uitest) uitest_frame(g);
+
     /* deferred audio init: the first frame is already on screen, so even a
      * slow audio device probe cannot make the game look like it hangs */
     if (g->audio_pending) {
@@ -857,6 +1152,9 @@ void wl_game_run_frame(WlGame *g)
         case WL_STATE_SETTINGS:     wl_menu_settings(g); break;
         default:                    wl_menu_mods(g); break;
         }
+        /* the open dropdown list renders above every other control */
+        wl_ui_draw_overlay(&g->ui);
+        uitest_maybe_shot(g);
         EndDrawing();
         break;
     }

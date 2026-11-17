@@ -48,7 +48,7 @@ make            # release build  -> bin/wildlands
 make debug      # debug build    -> bin/wildlands_debug
 make asan       # AddressSanitizer build
 make run        # build + run (auto-starts Xvfb when no display is present)
-make test       # build + run the unit tests (145 checks)
+make test       # build + run the unit tests (176 checks)
 make selftest   # build + run the in-game runtime self test
 make mods       # build the example mod (mods/example_mod/mod.so)
 make assets     # regenerate original assets (dev only, needs Python+Pillow)
@@ -62,6 +62,13 @@ VSync paces when it engages) and is configurable up to 240 in Settings.
 
 The game creates its runtime directories (`worlds/`, `mods/`, `config/`,
 `logs/`, `screenshots/`) automatically on first start.
+
+Menus with more content than fits (settings at small window sizes or UI
+scales, world creation) scroll with the mouse wheel; open dropdown lists
+render above all other controls and swallow clicks inside them. The UI
+runtime test (`./bin/wildlands --uitest settings` / `--uitest create`)
+drives the real menus with a scripted pointer and verifies focus, typing,
+scrolling, dropdown layering and world creation end to end.
 
 ### Command line
 

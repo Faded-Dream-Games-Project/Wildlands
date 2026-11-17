@@ -11,35 +11,111 @@
 #include <math.h>
 #include "rlgl.h"
 
+/* ------------------------------------------------------------------ */
+/* test seam (--uitest): replaces physical mouse/keyboard input         */
+/* ------------------------------------------------------------------ */
+
+static bool s_dbg_active = false;
+static Vector2 s_dbg_pos;
+static bool s_dbg_left_down = false, s_dbg_left_pressed = false;
+static int s_dbg_wheel = 0;
+static char s_dbg_chars[16];
+static int s_dbg_char_count = 0;
+
+void wl_ui_debug_input(bool enable, float x, float y, bool left_down,
+                       bool left_pressed, int wheel, const char *chars)
+{
+    s_dbg_active = enable;
+    s_dbg_pos = (Vector2){ x, y };
+    s_dbg_left_down = left_down;
+    s_dbg_left_pressed = left_pressed;
+    s_dbg_wheel = wheel;
+    s_dbg_char_count = 0;
+    if (chars) {
+        while (chars[s_dbg_char_count] && s_dbg_char_count < 15) {
+            s_dbg_chars[s_dbg_char_count] = chars[s_dbg_char_count];
+            s_dbg_char_count++;
+        }
+    }
+}
+
 void wl_ui_begin(WlUi *ui, WlAssets *assets, const WlConfig *cfg)
 {
     ui->assets = assets;
     ui->scale = cfg ? cfg->ui_scale : 1.0f;
-    ui->mouse = GetMousePosition();
-    ui->mouse_down = IsMouseButtonDown(MOUSE_BUTTON_LEFT);
-    ui->mouse_pressed = IsMouseButtonPressed(MOUSE_BUTTON_LEFT);
-    ui->mouse_released = IsMouseButtonReleased(MOUSE_BUTTON_LEFT);
-    ui->mouse_right_pressed = IsMouseButtonPressed(MOUSE_BUTTON_RIGHT);
-    ui->wheel = (int)GetMouseWheelMove();
     ui->hot = 0;
     ui->next_id = 1;
     ui->any_hover = false;
+    ui->scroll_active = false;
 
-    ui->char_count = 0;
-    int c = GetCharPressed();
-    while (c > 0 && ui->char_count < (int)sizeof(ui->chars) - 1) {
-        if (c >= 32 && c < 127) ui->chars[ui->char_count++] = (char)c;
-        c = GetCharPressed();
+    if (s_dbg_active) {
+        ui->mouse = s_dbg_pos;
+        ui->mouse_down = s_dbg_left_down;
+        ui->mouse_pressed = s_dbg_left_pressed;
+        ui->mouse_released = false;
+        ui->mouse_right_pressed = false;
+        ui->wheel = s_dbg_wheel;
+        ui->char_count = 0;
+        for (int i = 0; i < s_dbg_char_count; i++)
+            ui->chars[ui->char_count++] = s_dbg_chars[i];
+        s_dbg_char_count = 0; /* one shot per frame */
+        ui->chars[ui->char_count] = '\0';
+    } else {
+        ui->mouse = GetMousePosition();
+        ui->mouse_down = IsMouseButtonDown(MOUSE_BUTTON_LEFT);
+        ui->mouse_pressed = IsMouseButtonPressed(MOUSE_BUTTON_LEFT);
+        ui->mouse_released = IsMouseButtonReleased(MOUSE_BUTTON_LEFT);
+        ui->mouse_right_pressed = IsMouseButtonPressed(MOUSE_BUTTON_RIGHT);
+        ui->wheel = (int)GetMouseWheelMove();
+
+        ui->char_count = 0;
+        int c = GetCharPressed();
+        while (c > 0 && ui->char_count < (int)sizeof(ui->chars) - 1) {
+            if (c >= 32 && c < 127) ui->chars[ui->char_count++] = (char)c;
+            c = GetCharPressed();
+        }
+        ui->chars[ui->char_count] = '\0';
+        if (IsKeyPressed(KEY_ESCAPE) || (IsWindowFocused() == false))
+            ui->focus_textfield = 0;
     }
-    if (IsKeyPressed(KEY_ESCAPE) || (IsWindowFocused() == false))
-        ui->focus_textfield = 0;
 }
 
 void wl_ui_end(WlUi *ui)
 {
+    /* textfield focus: clicking anything else releases it */
     if (ui->mouse_pressed && ui->focus_textfield != 0 && ui->hot != ui->focus_textfield)
         ui->focus_textfield = 0;
-    ui->active = ui->active; /* no-op; kept for clarity */
+
+    /* keep the overlay rectangle alive until the end of the closing frame
+     * so widgets underneath cannot react to the same click that closed
+     * it; drop it once the dropdown is no longer active */
+    if (ui->overlay_open && ui->active != ui->overlay_id)
+        ui->overlay_open = false;
+}
+
+void wl_ui_draw_overlay(WlUi *ui)
+{
+    /* draws the open dropdown list. Must be called INSIDE the frame
+     * (between BeginDrawing and EndDrawing) after the other widgets, so
+     * the list renders above them; wl_ui_draw_overlay handles the
+     * rendering, wl_ui_end only the input bookkeeping. */
+    if (!ui->overlay_open) return;
+    Rectangle list = ui->overlay_rect;
+    wl_ui_panel(ui, list);
+    DrawRectangleLinesEx(list, 1.0f, (Color){ 20, 22, 26, 220 });
+    Font f = wl_ui_font(ui);
+    float fs = 22.0f * ui->scale;
+    float row_h = 32.0f * ui->scale;
+    for (int i = 0; i < ui->overlay_count; i++) {
+        Rectangle row = { list.x, list.y + row_h * i, list.width, row_h };
+        bool rh = CheckCollisionPointRec(ui->mouse, row);
+        if (rh) DrawRectangleRec(row, (Color){ 255, 255, 255, 26 });
+        Color c = (i == *ui->overlay_index) ? (Color){ 235, 232, 180, 255 }
+                                            : (Color){ 214, 218, 224, 255 };
+        DrawTextEx(f, ui->overlay_options[i],
+                   (Vector2){ row.x + 12 * ui->scale, row.y + (row_h - fs) / 2 },
+                   fs, 1.0f, c);
+    }
 }
 
 Font wl_ui_font(const WlUi *ui) { return wl_assets_font(ui->assets, WL_FONT_UI); }
@@ -76,9 +152,48 @@ static void draw_tex_stretched(Texture2D tex, Rectangle r, Color tint)
     DrawTexturePro(tex, src, r, (Vector2){ 0, 0 }, 0.0f, tint);
 }
 
-static bool mouse_over(Rectangle r)
+/* hover test with the two UI-context guards:
+ *  - while a dropdown list is open, controls underneath it do not react
+ *  - inside a scroll region, rows clipped out of the viewport are dead */
+static bool mouse_over(WlUi *ui, Rectangle r)
 {
-    return CheckCollisionPointRec(GetMousePosition(), r);
+    if (!CheckCollisionPointRec(ui->mouse, r)) return false;
+    if (ui->overlay_open && CheckCollisionPointRec(ui->mouse, ui->overlay_rect))
+        return false;
+    if (ui->scroll_active && CheckCollisionRecs(r, ui->scroll_view) &&
+        !CheckCollisionPointRec(ui->mouse, ui->scroll_view))
+        return false;
+    return true;
+}
+
+/* ------------------------------------------------------------------ */
+/* scroll region                                                       */
+/* ------------------------------------------------------------------ */
+
+void wl_ui_scroll_begin(WlUi *ui, Rectangle viewport, float content_h, float *scroll)
+{
+    if (scroll) {
+        float max_scroll = content_h - viewport.height;
+        if (max_scroll < 0) max_scroll = 0;
+        bool over_list = ui->overlay_open &&
+                         CheckCollisionPointRec(ui->mouse, ui->overlay_rect);
+        if (ui->wheel != 0 && CheckCollisionPointRec(ui->mouse, viewport) &&
+            !over_list) {
+            *scroll -= ui->wheel * 42.0f;
+        }
+        if (*scroll > max_scroll) *scroll = max_scroll;
+        if (*scroll < 0) *scroll = 0;
+    }
+    ui->scroll_active = true;
+    ui->scroll_view = viewport;
+    BeginScissorMode((int)viewport.x, (int)viewport.y,
+                     (int)viewport.width, (int)viewport.height);
+}
+
+void wl_ui_scroll_end(WlUi *ui)
+{
+    EndScissorMode();
+    ui->scroll_active = false;
 }
 
 /* ------------------------------------------------------------------ */
@@ -88,7 +203,7 @@ static bool mouse_over(Rectangle r)
 bool wl_ui_button(WlUi *ui, Rectangle r, const char *label)
 {
     int id = ui->next_id++;
-    bool hover = mouse_over(r);
+    bool hover = mouse_over(ui, r);
     bool held = hover && ui->mouse_down;
     bool pressed = hover && ui->mouse_pressed;
 
@@ -117,7 +232,7 @@ bool wl_ui_slider(WlUi *ui, Rectangle r, float *value, float vmin, float vmax,
 {
     int id = ui->next_id++;
     bool changed = false;
-    bool hover = mouse_over(r);
+    bool hover = mouse_over(ui, r);
     if (hover) { ui->hot = id; ui->any_hover = true; }
 
     float track_y = r.y + r.height / 2 - 3 * ui->scale;
@@ -138,7 +253,7 @@ bool wl_ui_slider(WlUi *ui, Rectangle r, float *value, float vmin, float vmax,
 
     if (hover && ui->mouse_down) {
         ui->active = id;
-        float nt = (GetMousePosition().x - r.x) / r.width;
+        float nt = (ui->mouse.x - r.x) / r.width;
         if (nt < 0) nt = 0;
         if (nt > 1) nt = 1;
         float nv = vmin + nt * (vmax - vmin);
@@ -173,16 +288,46 @@ bool wl_ui_dropdown(WlUi *ui, Rectangle r, int *index, const char **options,
 {
     int id = ui->next_id++;
     bool changed = false;
-    bool hover = mouse_over(r);
+    bool hover = mouse_over(ui, r);
     if (hover) { ui->hot = id; ui->any_hover = true; }
 
+    /* toggle / close first, so the overlay is registered on the very
+     * frame the list opens (not one frame later) */
+    if (ui->mouse_pressed && hover) {
+        ui->active = (ui->active == id) ? 0 : id;
+    } else if (ui->active == id && ui->mouse_pressed && !hover) {
+        /* a click inside the expanded list is a row pick, handled below */
+        bool click_in_list = CheckCollisionPointRec(ui->mouse, ui->overlay_rect);
+        if (!click_in_list) ui->active = 0;
+    }
     bool open = (ui->active == id);
-    if (hover && ui->mouse_pressed) {
-        open = !open;
-        ui->active = open ? id : 0;
-    } else if (open && ui->mouse_pressed && !hover) {
-        open = false;
-        ui->active = 0;
+
+    /* row input is processed here, immediately; the list itself is drawn
+     * at the end of the frame (wl_ui_end) so it renders above the rows
+     * that follow this widget */
+    if (open) {
+        float row_h = 32.0f * ui->scale;
+        float list_h = row_h * count;
+        Rectangle list = { r.x, r.y + r.height + 2, r.width, list_h };
+        if (list.y + list.height > (float)GetScreenHeight())
+            list.y = r.y - list_h - 2; /* flip up when it would overflow */
+
+        ui->overlay_open = true;
+        ui->overlay_id = id;
+        ui->overlay_rect = list;
+        ui->overlay_options = options;
+        ui->overlay_count = count;
+        ui->overlay_index = index;
+
+        for (int i = 0; i < count; i++) {
+            Rectangle row = { list.x, list.y + row_h * i, list.width, row_h };
+            if (CheckCollisionPointRec(ui->mouse, row) && ui->mouse_pressed) {
+                *index = i;
+                changed = true;
+                open = false;
+                ui->active = 0; /* closed; overlay lives until wl_ui_end */
+            }
+        }
     }
 
     Texture tex = wl_assets_tex(ui->assets, WL_TEX_GUI_BUTTON);
@@ -199,28 +344,45 @@ bool wl_ui_dropdown(WlUi *ui, Rectangle r, int *index, const char **options,
     DrawTextEx(f, open ? "-" : "+", (Vector2){ r.x + r.width - 26 * ui->scale,
                                                r.y + (r.height - ts.y) / 2 },
                fs, 1.0f, (Color){ 180, 186, 196, 255 });
+    return changed;
+}
 
-    if (open) {
-        float row_h = 32.0f * ui->scale;
-        Rectangle list = { r.x, r.y + r.height + 2, r.width, row_h * count };
-        wl_ui_panel(ui, list);
-        for (int i = 0; i < count; i++) {
-            Rectangle row = { r.x, r.y + r.height + 2 + row_h * i, r.width, row_h };
-            bool rh = mouse_over(row);
-            if (rh) {
-                DrawRectangleRec(row, (Color){ 255, 255, 255, 26 });
-                if (ui->mouse_pressed) {
-                    *index = i;
-                    changed = true;
-                    open = false;
-                    ui->active = 0;
-                }
-            }
-            Color c = (i == *index) ? (Color){ 235, 232, 180, 255 }
-                                    : (Color){ 214, 218, 224, 255 };
-            DrawTextEx(f, options[i], (Vector2){ row.x + 12 * ui->scale,
-                                                  row.y + (row_h - fs) / 2 },
-                       fs, 1.0f, c);
+/* ------------------------------------------------------------------ */
+/* text field                                                          */
+/* ------------------------------------------------------------------ */
+
+bool wl_ui_textfield_edit(char *buf, size_t cap, int *caret,
+                          const char *chars, bool backspace, bool del,
+                          bool left, bool right, bool home, bool end)
+{
+    bool changed = false;
+    int len = (int)strlen(buf);
+    if (*caret < 0) *caret = 0;
+    if (*caret > len) *caret = len;
+
+    if (backspace && *caret > 0) {
+        memmove(&buf[*caret - 1], &buf[*caret], (size_t)(len - *caret) + 1);
+        (*caret)--;
+        len--;
+        changed = true;
+    }
+    if (del && *caret < len) {
+        memmove(&buf[*caret], &buf[*caret + 1], (size_t)(len - *caret));
+        len--;
+        changed = true;
+    }
+    if (left && *caret > 0) (*caret)--;
+    if (right && *caret < len) (*caret)++;
+    if (home) *caret = 0;
+    if (end) *caret = len;
+
+    if (chars && chars[0]) {
+        for (const char *p = chars; *p; p++) {
+            if ((size_t)len + 1 >= cap) break; /* keep room for the NUL */
+            memmove(&buf[*caret + 1], &buf[*caret], (size_t)(len - *caret) + 1);
+            buf[(*caret)++] = *p;
+            len++;
+            changed = true;
         }
     }
     return changed;
@@ -229,10 +391,16 @@ bool wl_ui_dropdown(WlUi *ui, Rectangle r, int *index, const char **options,
 bool wl_ui_textfield(WlUi *ui, int id, Rectangle r, char *buf, size_t cap)
 {
     bool activated = false;
-    bool hover = mouse_over(r);
-    if (hover) ui->any_hover = true;
+    bool hover = mouse_over(ui, r);
+    if (hover) {
+        ui->any_hover = true;
+        ui->hot = id; /* wl_ui_end keeps focus only while the field is hot */
+    }
     if (hover && ui->mouse_pressed) {
-        ui->focus_textfield = id;
+        if (ui->focus_textfield != id) {
+            ui->focus_textfield = id;
+            ui->caret = (int)strlen(buf); /* caret starts at the end */
+        }
         activated = true;
     }
     bool focused = (ui->focus_textfield == id);
@@ -253,7 +421,13 @@ bool wl_ui_textfield(WlUi *ui, int id, Rectangle r, char *buf, size_t cap)
                    fs, 1.0f, (Color){ 232, 236, 240, 255 });
     }
     if (focused) {
-        Vector2 ts = MeasureTextEx(f, buf, fs, 1.0f);
+        /* caret at the current edit position */
+        char prefix[WL_UI_TEXTFIELD_CHARS];
+        int n = ui->caret < (int)strlen(buf) ? ui->caret : (int)strlen(buf);
+        if (n > WL_UI_TEXTFIELD_CHARS - 1) n = WL_UI_TEXTFIELD_CHARS - 1;
+        memcpy(prefix, buf, (size_t)n);
+        prefix[n] = '\0';
+        Vector2 ts = MeasureTextEx(f, prefix, fs, 1.0f);
         float blink = fmodf((float)GetTime(), 1.0f) < 0.55f ? 1.0f : 0.0f;
         if (blink > 0.0f)
             DrawRectangle((int)(r.x + 12 + ts.x), (int)(r.y + r.height * 0.22f),
@@ -262,11 +436,10 @@ bool wl_ui_textfield(WlUi *ui, int id, Rectangle r, char *buf, size_t cap)
     }
 
     if (focused) {
-        if (IsKeyPressed(KEY_BACKSPACE) && buf[0] != '\0')
-            buf[strlen(buf) - 1] = '\0';
-        if (ui->char_count > 0 && strlen(buf) + (size_t)ui->char_count < cap)
-            for (int i = 0; i < ui->char_count; i++)
-                buf[strlen(buf)] = ui->chars[i]; /* append (chars validated ASCII) */
+        wl_ui_textfield_edit(buf, cap, &ui->caret, ui->chars,
+                             IsKeyPressed(KEY_BACKSPACE), IsKeyPressed(KEY_DELETE),
+                             IsKeyPressed(KEY_LEFT), IsKeyPressed(KEY_RIGHT),
+                             IsKeyPressed(KEY_HOME), IsKeyPressed(KEY_END));
         if (IsKeyPressed(KEY_ENTER)) {
             ui->focus_textfield = 0;
             activated = true;
@@ -312,7 +485,7 @@ bool wl_ui_tabbar(WlUi *ui, Rectangle r, const char **tabs, int count, int *acti
     float tab_w = r.width / count;
     for (int i = 0; i < count; i++) {
         Rectangle tr = { r.x + tab_w * i, r.y, tab_w - 2, r.height };
-        bool hover = mouse_over(tr);
+        bool hover = mouse_over(ui, tr);
         if (hover) ui->any_hover = true;
         bool on = (i == *active);
         DrawRectangleRec(tr, on ? (Color){ 52, 58, 66, 255 }

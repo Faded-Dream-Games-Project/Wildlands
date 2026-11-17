@@ -70,6 +70,7 @@ typedef struct WlGame {
     /* settings scratch */
     WlConfig cfg_entry;     /* snapshot for Cancel */
     int settings_tab;
+    float settings_scroll;  /* settings list scroll position (px) */
     int rebinding_action;   /* -1 none, otherwise WlAction */
     int res_index;          /* resolution dropdown index */
 
@@ -83,6 +84,7 @@ typedef struct WlGame {
         char new_seed[32];
         int new_gamemode;
         int new_type;
+        float create_scroll;    /* create screen scroll position (px) */
     } menus;
 
     /* demo mode (--frames): exits after N frames */
@@ -97,10 +99,22 @@ typedef struct WlGame {
     bool demo_menu;
     char demo_start_menu[16];   /* "" | world select | create | settings */
     int demo_overlay;           /* 0 none, 2 inventory, 3 crafting table */
+    /* demo camera direction (--yaw/--pitch degrees, applied at world entry) */
+    bool demo_dir_set;
+    float demo_yaw, demo_pitch;
 
     /* runtime self test (--selftest / make selftest) */
     bool selftest;
     bool selftest_failed;
+
+    /* UI runtime test (--uitest settings|create): scripted pointer driver
+     * over the real menus, with logged assertions */
+    int uitest;                 /* 0 none, 1 settings, 2 create */
+    int uitest_phase;
+    int uitest_wait;
+    bool uitest_failed;
+    WlConfig uitest_cfg;        /* snapshot, restored when the test ends */
+    char uitest_shot[WL_PATH_MAX]; /* screenshot taken mid-frame when set */
 
     /* startup diagnostics */
     double init_started_ms;     /* CLOCK_MONOTONIC at init begin */

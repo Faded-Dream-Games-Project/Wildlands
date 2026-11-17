@@ -43,17 +43,33 @@ void wl_menu_settings(WlGame *g)
     DrawTextEx(tf, title, (Vector2){ (sw - ts.x) / 2, 26 * g->ui.scale }, fs, 2.0f, WHITE);
 
     float pw = 640 * g->ui.scale, ph = 520 * g->ui.scale;
+    /* keep the panel (and its footer buttons) inside the window; smaller
+     * windows scroll the content instead */
+    float max_ph = (float)GetScreenHeight() - 76 * g->ui.scale - 8;
+    if (ph > max_ph) ph = max_ph;
     Rectangle panel = { (sw - pw) / 2, 76 * g->ui.scale, pw, ph };
     wl_ui_panel(&g->ui, panel);
 
     Rectangle tabs = { panel.x + 12, panel.y + 12, panel.width - 24, 40 * g->ui.scale };
-    wl_ui_tabbar(&g->ui, tabs, k_tabs, 4, &g->settings_tab);
+    if (wl_ui_tabbar(&g->ui, tabs, k_tabs, 4, &g->settings_tab))
+        g->settings_scroll = 0; /* jump to the top when switching tabs */
 
     Rectangle area = { panel.x + 24, tabs.y + 56 * g->ui.scale,
                        panel.width - 48, panel.height - 190 * g->ui.scale };
 
+    /* content height per tab (rows are 52 px, binding rows 42 px); the
+     * list scrolls whenever the content outgrows the panel */
+    float content_h;
+    if (g->settings_tab == 0)      content_h = 12 * 52.0f + 8;
+    else if (g->settings_tab == 1) content_h = 4 * 52.0f + 8;
+    else if (g->settings_tab == 2)
+        content_h = 3 * 52.0f + 36.0f + (float)WL_ACT_COUNT * 42.0f + 8;
+    else                           content_h = 5 * 52.0f + 8;
+
+    wl_ui_scroll_begin(&g->ui, area, content_h, &g->settings_scroll);
+
     float x = area.x, w = area.width;
-    float y = area.y;
+    float y = area.y - g->settings_scroll;
     Row r;
 
     if (g->settings_tab == 0) {
@@ -170,8 +186,11 @@ void wl_menu_settings(WlGame *g)
                    (Color){ 165, 172, 182, 255 });
         y += 26;
 
+        float vy0 = area.y - 4, vy1 = area.y + area.height;
         for (int a = 0; a < (int)WL_ACT_COUNT; a++) {
-            if (y > area.y + area.height) break;
+            /* rows clipped out of the viewport are skipped; scrolling
+             * reaches them */
+            if (y + 36 < vy0 || y > vy1) { y += 42; continue; }
             Rectangle lr = { x, y, w * 0.52f, 36 };
             Rectangle br = { x + w * 0.55f, y, w * 0.45f, 36 };
             wl_ui_label(&g->ui, lr, wl_action_label((WlAction)a), RAYWHITE, false);
@@ -223,6 +242,8 @@ void wl_menu_settings(WlGame *g)
         wl_ui_label(&g->ui, r.label, "Pause on Focus Loss", RAYWHITE, false);
         wl_ui_toggle(&g->ui, r.control, &c->pause_on_focus_loss);
     }
+
+    wl_ui_scroll_end(&g->ui);
 
     /* footer buttons */
     Rectangle b = { panel.x + 16, panel.y + ph - 60 * g->ui.scale,
