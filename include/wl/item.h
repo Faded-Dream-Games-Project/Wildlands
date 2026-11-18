@@ -50,6 +50,27 @@ enum {
     WL_ITEM_ROTTEN_FLESH,
     WL_ITEM_STRING,
     WL_ITEM_BONE,
+    /* armor: leather / iron / diamond */
+    WL_ITEM_LEATHER_HELMET,
+    WL_ITEM_LEATHER_CHESTPLATE,
+    WL_ITEM_LEATHER_LEGGINGS,
+    WL_ITEM_LEATHER_BOOTS,
+    WL_ITEM_IRON_HELMET,
+    WL_ITEM_IRON_CHESTPLATE,
+    WL_ITEM_IRON_LEGGINGS,
+    WL_ITEM_IRON_BOOTS,
+    WL_ITEM_DIAMOND_HELMET,
+    WL_ITEM_DIAMOND_CHESTPLATE,
+    WL_ITEM_DIAMOND_LEGGINGS,
+    WL_ITEM_DIAMOND_BOOTS,
+    /* hoes + farming */
+    WL_ITEM_HOE_WOOD,
+    WL_ITEM_HOE_STONE,
+    WL_ITEM_HOE_IRON,
+    WL_ITEM_HOE_DIAMOND,
+    WL_ITEM_WHEAT,
+    WL_ITEM_SEEDS,
+    WL_ITEM_BREAD,
     WL_ITEM_COUNT_BASE
 };
 
@@ -64,6 +85,8 @@ typedef struct {
     uint8_t tool_tier;   /* 0 none; 1 wood 2 stone 3 iron 4 diamond */
     uint16_t durability; /* 0 = not a tool */
     uint8_t food;        /* hunger restored; 0 = not edible */
+    uint8_t armor_slot;  /* 0 = not armor; 1 helmet 2 chest 3 legs 4 boots */
+    uint8_t armor_points;/* protection points when worn (MC-style 4%/pt) */
 } WlItem;
 
 /* Ingredient groups used by the crafting matcher (stable ids for mods). */

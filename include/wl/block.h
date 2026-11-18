@@ -62,6 +62,24 @@ static inline int wl_water_flow_level(uint8_t id)
 /* true for source and flowing water alike */
 bool wl_blocks_liquid(uint8_t id);
 
+/* Farming blocks live at FIXED high ids (like the water flows) so mod
+ * block ids and old saves never shift. Wheat stages count DOWN: the
+ * mature stage is 231, sprout is 233, so growing is id - 1. */
+#define WL_BLOCK_FARMLAND     234
+#define WL_BLOCK_WHEAT_0      233 /* sprout */
+#define WL_BLOCK_WHEAT_1      232 /* mid */
+#define WL_BLOCK_WHEAT_2      231 /* mature: drops wheat + seeds */
+static inline int wl_wheat_stage(uint8_t id)
+{
+    return (id >= WL_BLOCK_WHEAT_2 && id <= WL_BLOCK_WHEAT_0)
+               ? WL_BLOCK_WHEAT_0 - (int)id + 1 : 0; /* 1..3, 0 = none */
+}
+static inline uint8_t wl_wheat_id(int stage) /* stage 1..3 */
+{
+    return (uint8_t)(WL_BLOCK_WHEAT_0 - (stage - 1));
+}
+bool wl_blocks_wheat(uint8_t id);
+
 typedef enum {
     WL_RENDER_SOLID = 0, /* full cube */
     WL_RENDER_CROSS,     /* X-shaped plant sprite */
@@ -73,6 +91,7 @@ typedef enum {
     WL_TOOL_PICKAXE,
     WL_TOOL_AXE,
     WL_TOOL_SHOVEL,
+    WL_TOOL_HOE,
     WL_TOOL_SWORD
 } WlToolKind;
 

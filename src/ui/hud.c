@@ -27,17 +27,6 @@ static void draw_hotbar(WlGame *g)
     float hb_x = (sw - hb_w) / 2.0f;
     float hb_y = sh - slot_w - 12.0f * ui->scale;
 
-    /* held item name toast */
-    if (g->item_toast > 0.0f && g->item_toast_name[0] != '\0') {
-        float a = g->item_toast < 0.5f ? g->item_toast / 0.5f : 1.0f;
-        Font f = wl_ui_font(ui);
-        float fs = 24.0f * ui->scale;
-        Vector2 ts = MeasureTextEx(f, g->item_toast_name, fs, 1.0f);
-        Color c = { 255, 255, 255, (unsigned char)(a * 255) };
-        DrawTextEx(f, g->item_toast_name,
-                   (Vector2){ (sw - ts.x) / 2, hb_y - 42 * ui->scale }, fs, 1.0f, c);
-    }
-
     Texture sel = wl_assets_tex(g->assets, WL_TEX_GUI_SLOT_SEL);
     for (int i = 0; i < WL_HOTBAR_SIZE; i++) {
         Rectangle r = { hb_x + i * slot_w, hb_y, slot_w - 2 * ui->scale,
@@ -193,6 +182,32 @@ void wl_hud_draw(WlGame *g)
 
     draw_hotbar(g);
     draw_survival_stats(g);
+
+    /* held item name toast: drawn LAST so no hotbar slot, heart or
+     * hunger icon can ever paint over it, and placed above the whole
+     * stats block (hearts sit at hb_y-24*scale, hunger at hb_y-45) */
+    if (g->item_toast > 0.0f && g->item_toast_name[0] != '\0') {
+        float a = g->item_toast < 0.5f ? g->item_toast / 0.5f : 1.0f;
+        Font f = wl_ui_font(&g->ui);
+        float fs = 24.0f * g->ui.scale;
+        float slot_w = 44.0f * g->ui.scale;
+        float hb_y = GetScreenHeight() - slot_w - 12.0f * g->ui.scale;
+        float y = hb_y - 78.0f * g->ui.scale;
+        Vector2 ts = MeasureTextEx(f, g->item_toast_name, fs, 1.0f);
+        /* long names shrink to fit instead of overflowing the screen */
+        float max_w = (float)GetScreenWidth() - 40.0f * g->ui.scale;
+        if (ts.x > max_w) {
+            fs *= max_w / ts.x;
+            ts = MeasureTextEx(f, g->item_toast_name, fs, 1.0f);
+        }
+        unsigned char alpha = (unsigned char)(a * 255);
+        Color shadow = { 20, 20, 24, alpha };
+        Color text = { 255, 255, 255, alpha };
+        Vector2 pos = { (GetScreenWidth() - ts.x) / 2.0f, y };
+        DrawTextEx(f, g->item_toast_name,
+                   (Vector2){ pos.x + 2, pos.y + 2 }, fs, 1.0f, shadow);
+        DrawTextEx(f, g->item_toast_name, pos, fs, 1.0f, text);
+    }
 
     if (g->player.damage_flash > 0.0f) {
         float a = (float)(g->player.damage_flash / 0.45) * 110.0f;

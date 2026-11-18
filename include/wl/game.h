@@ -50,6 +50,7 @@ typedef struct WlGame {
     WlState state;
     WlState settings_return;
     WlOverlay overlay;
+    WlOverlay prev_overlay; /* transition detection: cancel actions */
     bool quit;
 
     /* world session */

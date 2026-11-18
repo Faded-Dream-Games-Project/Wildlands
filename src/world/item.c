@@ -225,6 +225,80 @@ void wl_items_init(void)
     reg(WL_ITEM_BONE, (WlItem){
         .name = "bone", .display = "Bone", .tile = TILE_ICON_BONE, .max_stack = 64 });
 
+    /* armor: protection points per piece follow the classic formula
+     * (total * 4% damage reduction, capped at 80%); durability matches
+     * the standard survival balance so pieces last a night of fighting,
+     * not forever */
+    {
+        struct { WlItemId id; const char *name, *display; int tile;
+                 int pts, dur; } arm[] = {
+            { WL_ITEM_LEATHER_HELMET, "leather_helmet", "Leather Helmet",
+              TILE_ICON_ARM_LEATHER_HELM, 1, 55 },
+            { WL_ITEM_LEATHER_CHESTPLATE, "leather_chestplate", "Leather Chestplate",
+              TILE_ICON_ARM_LEATHER_CHEST, 3, 80 },
+            { WL_ITEM_LEATHER_LEGGINGS, "leather_leggings", "Leather Leggings",
+              TILE_ICON_ARM_LEATHER_LEGS, 2, 75 },
+            { WL_ITEM_LEATHER_BOOTS, "leather_boots", "Leather Boots",
+              TILE_ICON_ARM_LEATHER_BOOTS, 1, 65 },
+            { WL_ITEM_IRON_HELMET, "iron_helmet", "Iron Helmet",
+              TILE_ICON_ARM_IRON_HELM, 2, 165 },
+            { WL_ITEM_IRON_CHESTPLATE, "iron_chestplate", "Iron Chestplate",
+              TILE_ICON_ARM_IRON_CHEST, 6, 240 },
+            { WL_ITEM_IRON_LEGGINGS, "iron_leggings", "Iron Leggings",
+              TILE_ICON_ARM_IRON_LEGS, 5, 225 },
+            { WL_ITEM_IRON_BOOTS, "iron_boots", "Iron Boots",
+              TILE_ICON_ARM_IRON_BOOTS, 2, 195 },
+            { WL_ITEM_DIAMOND_HELMET, "diamond_helmet", "Diamond Helmet",
+              TILE_ICON_ARM_DIAMOND_HELM, 3, 363 },
+            { WL_ITEM_DIAMOND_CHESTPLATE, "diamond_chestplate", "Diamond Chestplate",
+              TILE_ICON_ARM_DIAMOND_CHEST, 8, 528 },
+            { WL_ITEM_DIAMOND_LEGGINGS, "diamond_leggings", "Diamond Leggings",
+              TILE_ICON_ARM_DIAMOND_LEGS, 6, 495 },
+            { WL_ITEM_DIAMOND_BOOTS, "diamond_boots", "Diamond Boots",
+              TILE_ICON_ARM_DIAMOND_BOOTS, 3, 429 },
+        };
+        for (size_t i = 0; i < sizeof(arm) / sizeof(arm[0]); i++) {
+            WlItem d = {
+                .name = arm[i].name, .display = arm[i].display,
+                .tile = (uint16_t)arm[i].tile, .max_stack = 1,
+                .durability = (uint16_t)arm[i].dur,
+                .armor_slot = (uint8_t)(i % 4 + 1),
+                .armor_points = (uint8_t)arm[i].pts,
+            };
+            reg(arm[i].id, d);
+        }
+    }
+    {
+        struct { WlItemId id; const char *name, *display; int tile, dur; } hoes[] = {
+            { WL_ITEM_HOE_WOOD, "wooden_hoe", "Wooden Hoe",
+              TILE_ICON_HOE_WOOD, 60 },
+            { WL_ITEM_HOE_STONE, "stone_hoe", "Stone Hoe",
+              TILE_ICON_HOE_STONE, 132 },
+            { WL_ITEM_HOE_IRON, "iron_hoe", "Iron Hoe",
+              TILE_ICON_HOE_IRON, 251 },
+            { WL_ITEM_HOE_DIAMOND, "diamond_hoe", "Diamond Hoe",
+              TILE_ICON_HOE_DIAMOND, 1562 },
+        };
+        for (size_t i = 0; i < sizeof(hoes) / sizeof(hoes[0]); i++) {
+            WlItem d = {
+                .name = hoes[i].name, .display = hoes[i].display,
+                .tile = (uint16_t)hoes[i].tile, .max_stack = 1,
+                .tool = WL_TOOL_HOE, .tool_tier = (uint8_t)(i + 1),
+                .durability = (uint16_t)hoes[i].dur,
+            };
+            reg(hoes[i].id, d);
+        }
+    }
+    reg(WL_ITEM_WHEAT, (WlItem){
+        .name = "wheat", .display = "Wheat", .tile = TILE_ICON_WHEAT,
+        .max_stack = 64 });
+    reg(WL_ITEM_SEEDS, (WlItem){
+        .name = "seeds", .display = "Seeds", .tile = TILE_ICON_SEEDS,
+        .max_stack = 64 });
+    reg(WL_ITEM_BREAD, (WlItem){
+        .name = "bread", .display = "Bread", .tile = TILE_ICON_BREAD,
+        .max_stack = 64, .food = 5 });
+
     g_items_initialized = true;
     WL_LOGI("item registry: %d entries", g_item_count);
 }

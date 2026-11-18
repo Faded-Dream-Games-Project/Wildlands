@@ -504,6 +504,8 @@ bool wl_game_enter_world(WlGame *g, const WlWorldEntry *entry)
         wl_inv_add(&g->player.inv, WL_BLOCK_FURNACE, 1, 0);
         wl_inv_add(&g->player.inv, WL_ITEM_COAL, 8, 0);
         wl_inv_add(&g->player.inv, WL_BLOCK_IRON_ORE, 4, 0);
+        wl_inv_add(&g->player.inv, WL_ITEM_IRON_CHESTPLATE, 1, 240);
+        wl_inv_add(&g->player.inv, WL_ITEM_LEATHER_HELMET, 1, 55);
     }
     return true;
 }
@@ -873,6 +875,82 @@ static void run_selftest(WlGame *g)
                            wl_world_get_block(w, fx, fy, fz) ==
                                WL_BLOCK_FURNACE);
         }
+        /* 6c0. armor: equip, damage reduction, durability decay and
+         * shatter; plus the farming loop end to end */
+        {
+            WlPlayer *ap = &g->player;
+            float hp_full = ap->health = 20.0f;
+            ap->armor[0] = (WlSlot){ WL_ITEM_IRON_HELMET, 1, 165 };
+            ap->armor[1] = (WlSlot){ WL_ITEM_IRON_CHESTPLATE, 1, 240 };
+            selftest_check(g, "armor points counted when worn",
+                           wl_player_armor_points(ap) == 8);
+            wl_player_damage(ap, 10.0f, &g->audio, 2);
+            /* 8 points * 4% = 32% reduction: 10 -> 6.8 damage */
+            selftest_check(g, "armor reduces damage (10 -> 6.8)",
+                           fabsf((20.0f - 6.8f) - ap->health) < 0.01f);
+            selftest_check(g, "armor loses durability when hit",
+                           ap->armor[0].dur == 164);
+            /* beat the helmet to zero: it must shatter, not go
+             * negative (heal each hit so the player never dies and
+             * stops taking damage mid-way) */
+            for (int i = 0; i < 200; i++) {
+                ap->health = 20.0f;
+                wl_player_damage(ap, 0.5f, &g->audio, 2);
+            }
+            selftest_check(g, "broken armor piece is removed",
+                           ap->armor[0].item == WL_ITEM_NONE);
+            ap->health = hp_full;
+            memset(ap->armor, 0, sizeof(ap->armor));
+
+            /* farming: till, plant, grow, harvest drops */
+            int fx2 = px + 2, fz2 = pz + 5;
+            wl_world_set_block(w, fx2, py, fz2, WL_BLOCK_GRASS);
+            wl_world_set_block(w, fx2, py + 1, fz2, WL_BLOCK_AIR);
+            wl_world_set_block(w, fx2, py, fz2, WL_BLOCK_FARMLAND);
+            wl_world_set_block(w, fx2, py + 1, fz2, wl_wheat_id(1));
+            wl_world_schedule_water(w, fx2, py + 1, fz2, 0.01f);
+            /* two growth steps with 18-37s jitter each: simulate 90s */
+            for (int i = 0; i < 1800; i++) wl_world_water_tick(w, 0.05f);
+            selftest_check(g, "wheat grows through its stages",
+                           wl_world_get_block(w, fx2, py + 1, fz2) ==
+                               wl_wheat_id(3));
+            /* bread recipe: 3 wheat */
+            WlInventory bi;
+            wl_inv_init(&bi);
+            wl_inv_add(&bi, WL_ITEM_WHEAT, 3, 0);
+            bi.craft_w = 2;
+            bi.craft[0] = (WlSlot){ WL_ITEM_WHEAT, 1, 0 };
+            bi.craft[1] = (WlSlot){ WL_ITEM_WHEAT, 1, 0 };
+            bi.craft[3] = (WlSlot){ WL_ITEM_WHEAT, 1, 0 };
+            const WlRecipe *br = wl_crafting_match(bi.craft, bi.craft_w);
+            selftest_check(g, "bread bakes from three wheat",
+                           br && br->out_item == WL_ITEM_BREAD);
+            /* hoe + armor recipes exist and produce real items */
+            {
+                WlInventory ri;
+                wl_inv_init(&ri);
+                ri.craft_w = 3;
+                ri.craft[0] = (WlSlot){ WL_ITEM_IRON_INGOT, 1, 0 };
+                ri.craft[1] = (WlSlot){ WL_ITEM_IRON_INGOT, 1, 0 };
+                ri.craft[4] = (WlSlot){ WL_ITEM_STICK, 1, 0 };
+                ri.craft[7] = (WlSlot){ WL_ITEM_STICK, 1, 0 };
+                const WlRecipe *hr = wl_crafting_match(ri.craft, 3);
+                selftest_check(g, "iron hoe recipe matches",
+                               hr && hr->out_item == WL_ITEM_HOE_IRON);
+                wl_inv_init(&ri);
+                ri.craft_w = 3;
+                uint16_t chest[9] = { WL_ITEM_DIAMOND, 0, WL_ITEM_DIAMOND,
+                                      WL_ITEM_DIAMOND, WL_ITEM_DIAMOND,
+                                      WL_ITEM_DIAMOND, WL_ITEM_DIAMOND,
+                                      WL_ITEM_DIAMOND, WL_ITEM_DIAMOND };
+                for (int i = 0; i < 9; i++)
+                    if (chest[i]) ri.craft[i] = (WlSlot){ chest[i], 1, 0 };
+                const WlRecipe *ar = wl_crafting_match(ri.craft, 3);
+                selftest_check(g, "diamond chestplate recipe matches",
+                               ar && ar->out_item == WL_ITEM_DIAMOND_CHESTPLATE);
+            }
+        }
+
         /* 6c. water: a source flows into a space opened beside it and
          * dries again when dammed off (real game loop path) */
         {
@@ -1792,6 +1870,8 @@ static void play_frame(WlGame *g)
                 for (int q = 0; q < en; q++)
                     if (ee && ee[q].active) alive++;
                 WL_LOGD("demo ents: total=%d alive=%d", en, alive);
+                WL_LOGD("demo act: mine=%.2f swing=%.2f eat=%.2f",
+                        p->break_progress, p->action_swing, p->eat_timer);
             }
             WlWorldStats st = wl_world_stats(g->world);
             WL_LOGD("demo pos %.1f,%.1f,%.1f yaw %.2f pitch %.2f drawn %d tris %ld pending %d | "
@@ -1856,6 +1936,16 @@ void wl_game_run_frame(WlGame *g)
                 g->audio.enabled ? "ready" : "unavailable, running silent",
                 stage_mark() - ta, g->cfg.vol_master, g->cfg.vol_music,
                 g->cfg.vol_sfx, g->cfg.vol_ambient);
+    }
+
+    /* overlay transitions cancel running actions: opening a UI while
+     * mining/placing/eating must never leave a stuck animation (the
+     * crack overlay and the held-item swing retrigger both key off
+     * break_progress, which would otherwise stay frozen > 0 behind
+     * the UI while the mouse button state is swallowed by it) */
+    if (g->overlay != g->prev_overlay) {
+        wl_player_cancel_actions(&g->player);
+        g->prev_overlay = g->overlay;
     }
 
     wl_ui_begin(&g->ui, g->assets, &g->cfg);

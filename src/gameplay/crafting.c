@@ -161,6 +161,42 @@ void wl_crafting_init(void)
         add_shapeless(WL_BLOCK_PLANKS, 4, ing, 1);
     }
     {
+        uint16_t ing[3] = { WL_ITEM_WHEAT, WL_ITEM_WHEAT, WL_ITEM_WHEAT };
+        add_shapeless(WL_ITEM_BREAD, 1, ing, 3);
+    }
+    /* hoes: 2 material + 2 sticks (crafting table, 3-wide) */
+    {
+        const uint16_t mats[4] = { WL_BLOCK_PLANKS, WL_BLOCK_COBBLE,
+                                   WL_ITEM_IRON_INGOT, WL_ITEM_DIAMOND };
+        const uint16_t outs[4] = { WL_ITEM_HOE_WOOD, WL_ITEM_HOE_STONE,
+                                   WL_ITEM_HOE_IRON, WL_ITEM_HOE_DIAMOND };
+        for (int i = 0; i < 4; i++) {
+            uint16_t pat[9] = { mats[i], mats[i], 0,
+                                0, WL_ITEM_STICK, 0,
+                                0, WL_ITEM_STICK, 0 };
+            add_shaped(outs[i], 1, 3, 3, pat);
+        }
+    }
+    /* armor sets: helmet 5 / chest 8 / legs 7 / boots 4 material */
+    {
+        const uint16_t mats[3] = { WL_ITEM_LEATHER, WL_ITEM_IRON_INGOT,
+                                   WL_ITEM_DIAMOND };
+        const WlItemId bases[3] = { WL_ITEM_LEATHER_HELMET,
+                                    WL_ITEM_IRON_HELMET,
+                                    WL_ITEM_DIAMOND_HELMET };
+        for (int m = 0; m < 3; m++) {
+            uint16_t M = mats[m], O = 0;
+            uint16_t helm[6] = { M, M, M, O, M, O };
+            add_shaped((uint16_t)(bases[m] + 0), 1, 3, 2, helm);
+            uint16_t chest[9] = { M, O, M, M, M, M, M, M, M };
+            add_shaped((uint16_t)(bases[m] + 1), 1, 3, 3, chest);
+            uint16_t legs[9] = { M, M, M, M, O, M, M, O, M };
+            add_shaped((uint16_t)(bases[m] + 2), 1, 3, 3, legs);
+            uint16_t boots[4] = { M, O, M, O };
+            add_shaped((uint16_t)(bases[m] + 3), 1, 2, 2, boots);
+        }
+    }
+    {
         uint16_t pat[2] = { WL_BLOCK_PLANKS, WL_BLOCK_PLANKS };
         add_shaped(WL_ITEM_STICK, 4, 1, 2, pat);
     }

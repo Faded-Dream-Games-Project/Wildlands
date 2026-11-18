@@ -2,6 +2,7 @@
 #include "wl/inv_ui.h"
 #include "wl/game.h"
 #include "wl/world.h"
+#include <stdio.h>
 #include "wl/crafting.h"
 #include "wl/item.h"
 #include "wl/audio.h"
@@ -14,6 +15,7 @@ typedef enum {
     SLOT_INV,     /* index 0..35 */
     SLOT_CRAFT,   /* index 0..8  */
     SLOT_RESULT,
+    SLOT_ARMOR,   /* index 0..3: helmet, chest, legs, boots */
 } SlotKind;
 
 typedef struct {
@@ -25,6 +27,7 @@ static WlSlot *ref_slot(WlGame *g, SlotRef s)
 {
     if (s.kind == SLOT_INV) return &g->player.inv.slots[s.index];
     if (s.kind == SLOT_CRAFT) return &g->player.inv.craft[s.index];
+    if (s.kind == SLOT_ARMOR) return &g->player.armor[s.index];
     return NULL;
 }
 
@@ -52,9 +55,16 @@ static void draw_grid(WlGame *g, Rectangle pos, SlotKind kind, int count, int co
 }
 
 static SlotRef slot_at(WlGame *g, Rectangle inv_area, Rectangle craft_area,
-                       Rectangle result_area)
+                       Rectangle result_area, Rectangle armor_area)
 {
     if (CheckCollisionPointRec(g->ui.mouse, result_area)) return (SlotRef){ SLOT_RESULT, 0 };
+
+    if (armor_area.width > 0 && CheckCollisionPointRec(g->ui.mouse, armor_area)) {
+        float cell = armor_area.width;
+        int idx = (int)((g->ui.mouse.y - armor_area.y) / cell);
+        if (idx >= 0 && idx < 4)
+            return (SlotRef){ SLOT_ARMOR, idx };
+    }
 
     if (CheckCollisionPointRec(g->ui.mouse, craft_area)) {
         int cols = g->player.inv.craft_w;
@@ -136,8 +146,34 @@ static void slot_click(WlGame *g, SlotRef ref, bool right, bool shift)
     WlSlot *s = ref_slot(g, ref);
     if (!s) return;
 
+    /* armor slots only accept the matching piece; taking is always ok */
+    if (ref.kind == SLOT_ARMOR && held->item != WL_ITEM_NONE) {
+        const WlItem *hdef = wl_item_get(held->item);
+        if (!hdef || hdef->armor_slot != ref.index + 1) return;
+    }
+
     if (shift && held->item == WL_ITEM_NONE && s->item != WL_ITEM_NONE) {
-        /* quick move: hotbar <-> main inventory, or grid -> inventory */
+        /* quick move: armor pieces auto-equip, worn armor goes back to
+         * the inventory, everything else hotbar <-> main */
+        if (ref.kind == SLOT_ARMOR) {
+            if (wl_inv_add(&g->player.inv, s->item, s->count, s->dur)) {
+                s->item = WL_ITEM_NONE;
+                s->count = 0;
+                s->dur = 0;
+            }
+            return;
+        }
+        if (ref.kind == SLOT_INV) {
+            const WlItem *idef = wl_item_get(s->item);
+            if (idef && idef->armor_slot > 0 &&
+                g->player.armor[idef->armor_slot - 1].item == WL_ITEM_NONE) {
+                g->player.armor[idef->armor_slot - 1] = *s;
+                s->item = WL_ITEM_NONE;
+                s->count = 0;
+                s->dur = 0;
+                return;
+            }
+        }
         if (ref.kind == SLOT_CRAFT) {
             if (wl_inv_add(&g->player.inv, s->item, s->count, s->dur)) {
                 s->item = WL_ITEM_NONE;
@@ -237,19 +273,21 @@ typedef enum {
     CAT_BLOCKS = 0,
     CAT_NATURE,
     CAT_TOOLS,
+    CAT_EQUIPMENT,
     CAT_FOOD,
     CAT_MATERIALS,
     CAT_COUNT
 } CatId;
 
 static const char *k_cat_names[CAT_COUNT] = {
-    "Building", "Nature", "Tools", "Food", "Materials"
+    "Building", "Nature", "Tools", "Gear", "Food", "Materials"
 };
 
 static int item_category(WlItemId id)
 {
     const WlItem *d = wl_item_get(id);
     if (!d) return -1;
+    if (d->armor_slot > 0) return CAT_EQUIPMENT;
     if (d->tool != WL_TOOL_NONE) return CAT_TOOLS;
     if (d->food > 0) return CAT_FOOD;
     if (!d->is_block) return CAT_MATERIALS;
@@ -257,7 +295,7 @@ static int item_category(WlItemId id)
     if (strstr(n, "flower") || strstr(n, "grass") || strstr(n, "log") ||
         strstr(n, "leaves") || strstr(n, "cactus") || strstr(n, "sand") ||
         strstr(n, "snow") || strstr(n, "ice") || strstr(n, "gravel") ||
-        strstr(n, "dirt"))
+        strstr(n, "dirt") || strstr(n, "wheat") || strstr(n, "seeds"))
         return CAT_NATURE;
     return CAT_BLOCKS;
 }
@@ -441,11 +479,79 @@ void wl_inv_ui_draw(WlGame *g)
     int cw = creative ? 0 : inv->craft_w;
 
     float cell = 46 * g->ui.scale;
-    float pw = cell * 9 + 48 * g->ui.scale;
+    /* character mode (survival inventory, not the crafting table and
+     * not creative) adds a preview + armor column on the left */
+    bool character = (g->overlay == WL_OVERLAY_INVENTORY) && !creative;
+    float col = character ? 170.0f * g->ui.scale : 0.0f;
+    float pw = cell * 9 + 48 * g->ui.scale + col;
     float grid_h = creative ? cell * 3 + 96.0f * g->ui.scale : cell * cw;
     float ph = grid_h + cell * 5 + 96 * g->ui.scale;
     Rectangle panel = { (sw - pw) / 2, (sh - ph) / 2, pw, ph };
     wl_ui_panel(&g->ui, panel);
+
+    /* left column: rotating character preview + the four armor slots */
+    Rectangle armor_area = { 0, 0, 0, 0 };
+    static float s_prev_yaw = 0.55f;
+    if (character) {
+        float px0 = panel.x + 18 * g->ui.scale;
+        float py0 = panel.y + 50 * g->ui.scale;
+        float pw2 = 118 * g->ui.scale, ph2 = 168 * g->ui.scale;
+        Rectangle prev_r = { px0, py0, pw2, ph2 };
+
+        /* drag to rotate */
+        static bool s_prev_drag = false;
+        static Vector2 s_last_mouse = { 0, 0 };
+        if (CheckCollisionPointRec(g->ui.mouse, prev_r) && g->ui.mouse_pressed)
+            s_prev_drag = true;
+        if (!g->ui.mouse_down) s_prev_drag = false;
+        if (s_prev_drag) {
+            s_prev_yaw += (g->ui.mouse.x - s_last_mouse.x) * 0.02f;
+        }
+        s_last_mouse = g->ui.mouse;
+
+        Texture2D pt = wl_renderer_player_preview(
+            &g->rend, g->player.armor, s_prev_yaw);
+        if (pt.id != 0) {
+            Rectangle src = { 0, 0, (float)pt.width, -(float)pt.height };
+            DrawTexturePro(pt, src, prev_r, (Vector2){ 0, 0 }, 0.0f, WHITE);
+        }
+        DrawRectangleLinesEx(prev_r, 2.0f, (Color){ 70, 74, 82, 255 });
+        DrawTextEx(wl_ui_font(&g->ui), "drag to turn",
+                   (Vector2){ px0 + 18 * g->ui.scale, py0 + ph2 + 4 * g->ui.scale },
+                   13 * g->ui.scale, 1.0f, (Color){ 140, 146, 154, 255 });
+
+        /* armor slots: helmet, chest, legs, boots (top to bottom) */
+        float ax = px0 + pw2 + 12 * g->ui.scale;
+        float ay = py0 + 8 * g->ui.scale;
+        armor_area = (Rectangle){ ax, ay, cell, cell * 4 + 24.0f * g->ui.scale };
+        static const char *k_slot_names[4] = { "helmet", "chest", "legs", "boots" };
+        for (int i = 0; i < 4; i++) {
+            Rectangle r = { ax, ay + i * (cell + 8.0f * g->ui.scale),
+                            cell - 3.0f * g->ui.scale, cell - 3.0f * g->ui.scale };
+            WlSlot *s = &g->player.armor[i];
+            wl_ui_draw_slot_item(&g->ui, r, s);
+            if (s->item == WL_ITEM_NONE) {
+                /* empty-slot hint label */
+                DrawTextEx(wl_ui_font(&g->ui), k_slot_names[i],
+                           (Vector2){ r.x + 3, r.y + r.height - 13 * g->ui.scale },
+                           11 * g->ui.scale, 1.0f, (Color){ 110, 116, 124, 255 });
+            }
+            if (CheckCollisionPointRec(g->ui.mouse, r)) {
+                DrawRectangleLinesEx((Rectangle){ r.x - 1, r.y - 1,
+                                                 r.width + 2, r.height + 2 },
+                                     2.0f, (Color){ 240, 236, 190, 220 });
+                if (s->item != WL_ITEM_NONE && !g->ui.mouse_down) {
+                    const WlItem *item = wl_item_get(s->item);
+                    if (item) {
+                        char tip[96];
+                        snprintf(tip, sizeof(tip), "%s (%d armor)",
+                                 item->display, (int)item->armor_points);
+                        wl_ui_tooltip(&g->ui, tip);
+                    }
+                }
+            }
+        }
+    }
 
     /* title */
     Font tf = wl_ui_title_font(&g->ui);
@@ -455,7 +561,7 @@ void wl_inv_ui_draw(WlGame *g)
     DrawTextEx(tf, title, (Vector2){ panel.x + 20, panel.y + 14 }, fs, 2.0f,
                (Color){ 235, 235, 225, 255 });
 
-    float gx = panel.x + 24 * g->ui.scale;
+    float gx = panel.x + 24 * g->ui.scale + col;
     float gy = panel.y + 56 * g->ui.scale;
 
     if (creative) {
@@ -502,7 +608,7 @@ void wl_inv_ui_draw(WlGame *g)
     draw_grid(g, (Rectangle){ gx, hy, cell * 9, cell }, SLOT_INV, 9, 9, 0);
 
     /* interactions */
-    SlotRef ref = slot_at(g, inv_area, craft_area, result_area);
+    SlotRef ref = slot_at(g, inv_area, craft_area, result_area, armor_area);
     if (g->ui.mouse_pressed && ref.kind != SLOT_NONE)
         slot_click(g, ref, false, IsKeyDown(KEY_LEFT_SHIFT));
     else if (g->ui.mouse_right_pressed && ref.kind != SLOT_NONE)

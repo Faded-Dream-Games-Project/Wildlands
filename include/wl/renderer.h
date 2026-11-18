@@ -3,6 +3,7 @@
 #define WL_RENDERER_H
 
 #include "wl/wl_common.h"
+#include "wl/inventory.h" /* WlSlot: armor preview API */
 #include "raylib.h"
 #include "wl/item.h" /* WL_ITEM_MAX */
 #include "wl/assets.h"
@@ -43,6 +44,11 @@ typedef struct WlRenderer {
      * that worked on some drivers and broke held items on others. */
     Mesh item_mesh[WL_ITEM_MAX];
     bool item_mesh_ok[WL_ITEM_MAX];
+
+    /* inventory character preview: the player model renders into this
+     * texture each frame the inventory is open */
+    RenderTexture2D preview_rt;
+    bool preview_ok;
 
     /* first-person held-item animation state (updated every frame from
      * player movement/actions, never from raw mouse delta) */
@@ -106,6 +112,11 @@ void wl_renderer_draw_drops(WlRenderer *r, struct WlWorld *w, uint32_t ticks);
  * covers it. Call after the world + drops, still inside BeginDrawing(). */
 void wl_renderer_draw_held_item(WlRenderer *r, struct WlWorld *w,
                                 const struct WlPlayer *p);
+
+/* Renders the player character (with worn armor) into the preview
+ * texture and returns it. yaw rotates the model. */
+Texture2D wl_renderer_player_preview(WlRenderer *r, const WlSlot armor[4],
+                                     float yaw);
 
 /* Mobs, animals and arrows: animated box models skinned from the entity
  * atlas, lit by the voxel light at each entity's position. */

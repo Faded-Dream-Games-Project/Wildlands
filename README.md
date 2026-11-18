@@ -68,6 +68,17 @@ identity. Build, explore, survive, and create.
   sword in wood, stone, iron and diamond, plus a torch and extruded food
   sprites) with walk bob, idle sway, landing dip, equip dip and action
   swings driven by player state — never by raw mouse movement.
+- **First-person viewmodel** — tools attach to a stable camera-space
+  anchor (looking around never rotates the held tool) with per-item grip
+  poses, walk/run bob, idle sway, landing and equip dips, and distinct
+  swing arcs for mining, sword attacks and eating.
+- **Character screen + armor** — the survival inventory shows a rotating
+  player preview with helmet/chest/legs/boots slots; leather, iron and
+  diamond armor reduce damage (4% per point, capped 80%), lose
+  durability per hit and shatter at zero. Armor persists in saves.
+- **Farming** — craft a hoe, till grass or dirt into farmland, plant
+  seeds (tall grass drops them), watch wheat grow through three stages
+  and bake bread from the harvest.
 - **Creative catalogue** — the inventory in creative mode becomes a
   tabbed catalogue of every obtainable item (building / nature / tools /
   food / materials) with a search field; clicking takes stacks, right
@@ -125,8 +136,10 @@ the furnace UI opens and closes cleanly around a camera-lifecycle
 check, Q drops one item while Shift+Q drops the stack, and held tool/
 food sprites render in first person (18 checks). Unit tests cover the
 water propagation rules, drops, inventory and crafting (588 checks);
-the in-game selftest adds 48 checks including water flow and the death
-animation.
+the in-game selftest adds 56 checks covering water flow, the death
+animation, armor protection/durability, farming growth and the new
+recipes; 20 genuine-X11-input checks cover the full input surface
+including a mid-action overlay regression (stuck animation).
 
 `tools/repro_render.sh` and `tools/verify_battery.sh` reproduce and
 regression-test the render pipeline against camera-motion artifacts

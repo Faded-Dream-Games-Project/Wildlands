@@ -208,6 +208,13 @@ bool wl_worlds_save_session(WlWorld *w, const WlPlayer *p, Vector3 spawn,
             pok = pok && wl_sb_printf(&sb, "inv.%d = %d:%d:%d\n", i,
                                       (int)s->item, (int)s->count, (int)s->dur);
         }
+        /* worn armor */
+        for (int i = 0; i < 4; i++) {
+            const WlSlot *s = &p->armor[i];
+            if (s->item == WL_ITEM_NONE) continue;
+            pok = pok && wl_sb_printf(&sb, "armor.%d = %d:%d:%d\n", i,
+                                      (int)s->item, (int)s->count, (int)s->dur);
+        }
         /* crafting grid leftovers */
         for (int i = 0; i < WL_CRAFT_GRID_MAX; i++) {
             const WlSlot *s = &p->inv.craft[i];
@@ -254,6 +261,22 @@ bool wl_worlds_load_player(const char *dir_name, WlPlayer *p, bool *out_found)
         else if (wl_str_eq(key, "air") && wl_parse_float(val, &fv)) p->air = fv;
         else if (wl_str_eq(key, "selected") && wl_parse_long(val, &lv))
             p->selected_slot = wl_clampi((int)lv, 0, WL_HOTBAR_SIZE - 1);
+        else if (wl_str_starts_with(key, "armor.")) {
+            int idx = -1;
+            if (wl_parse_long(key + 6, &lv)) idx = (int)lv;
+            if (idx >= 0 && idx < 4) {
+                int item = 0, count = 0, dur = 0;
+                if (sscanf(val, "%d:%d:%d", &item, &count, &dur) == 3 &&
+                    item > 0 && count > 0 && wl_item_valid((WlItemId)item)) {
+                    const WlItem *def = wl_item_get((WlItemId)item);
+                    if (def && def->armor_slot == idx + 1) {
+                        p->armor[idx].item = (uint16_t)item;
+                        p->armor[idx].count = (uint8_t)(count > 1 ? 1 : count);
+                        p->armor[idx].dur = (uint16_t)dur;
+                    }
+                }
+            }
+        }
         else if (wl_str_starts_with(key, "inv.") || wl_str_starts_with(key, "craft.")) {
             int idx = -1;
             if (wl_parse_long(key + (key[0] == 'i' ? 4 : 6), &lv)) idx = (int)lv;

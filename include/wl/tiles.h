@@ -105,7 +105,33 @@ enum WlTile {
     TILE_BASE_COUNT,
     /* fixed high slot used to tint solid-colour box models (held
      * tools): far above every base and mod-registered tile */
-    TILE_SOLID_WHITE = 250
+    TILE_SOLID_WHITE = 250,
+    /* armor / hoe / farming icon tiles and block textures, also at
+     * fixed high slots so mod atlas tiles never shift (see
+     * tools/gen_assets.py, painted after the base loop) */
+    TILE_ICON_ARM_LEATHER_HELM = 220,
+    TILE_ICON_ARM_LEATHER_CHEST = 221,
+    TILE_ICON_ARM_LEATHER_LEGS = 222,
+    TILE_ICON_ARM_LEATHER_BOOTS = 223,
+    TILE_ICON_ARM_IRON_HELM = 224,
+    TILE_ICON_ARM_IRON_CHEST = 225,
+    TILE_ICON_ARM_IRON_LEGS = 226,
+    TILE_ICON_ARM_IRON_BOOTS = 227,
+    TILE_ICON_ARM_DIAMOND_HELM = 228,
+    TILE_ICON_ARM_DIAMOND_CHEST = 229,
+    TILE_ICON_ARM_DIAMOND_LEGS = 230,
+    TILE_ICON_ARM_DIAMOND_BOOTS = 231,
+    TILE_ICON_HOE_WOOD = 232,
+    TILE_ICON_HOE_STONE = 233,
+    TILE_ICON_HOE_IRON = 234,
+    TILE_ICON_HOE_DIAMOND = 235,
+    TILE_ICON_WHEAT = 236,
+    TILE_ICON_SEEDS = 237,
+    TILE_ICON_BREAD = 238,
+    TILE_FARMLAND = 239,
+    TILE_WHEAT_STAGE1 = 240,
+    TILE_WHEAT_STAGE2 = 241,
+    TILE_WHEAT_STAGE3 = 242
 };
 
 #endif /* WL_TILES_H */

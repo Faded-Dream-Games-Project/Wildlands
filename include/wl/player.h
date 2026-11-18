@@ -24,6 +24,7 @@ typedef struct WlPlayer {
     float eye_height;    /* eased current */
     float bob_phase;
     float action_swing;   /* > 0: one-shot held-item swing (attack/place/eat) */
+    WlSlot armor[4];      /* helmet, chestplate, leggings, boots */
     float bob_amount;
 
     /* survival */
@@ -66,6 +67,14 @@ void wl_player_respawn(WlPlayer *p, Vector3 spawn);
 
 Vector3 wl_player_eye(const WlPlayer *p);
 Vector3 wl_player_look_dir(const WlPlayer *p);
+
+/* Cancels every running player action (mining progress, placement /
+ * attack swing, eating) so opening a UI mid-action can never leave a
+ * stuck animation behind. */
+void wl_player_cancel_actions(WlPlayer *p);
+
+/* Total equipped armor points (worn pieces only). */
+int wl_player_armor_points(const WlPlayer *p);
 /* AABB extents for collisions: half-width and current height. */
 void wl_player_extents(const WlPlayer *p, float *half_w, float *height);
 

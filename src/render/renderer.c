@@ -215,6 +215,9 @@ void wl_renderer_init(WlRenderer *r, WlAssets *assets)
     WL_LOGI("renderer: entity atlas texture id=%u",
             r->ent_maps[MATERIAL_MAP_DIFFUSE].texture.id);
 
+    r->preview_rt = LoadRenderTexture(128, 192);
+    r->preview_ok = r->preview_rt.id != 0;
+
     r->mat_item = r->mat_ent;
     r->mat_item.maps = r->item_maps;
     memset(r->item_maps, 0, sizeof(r->item_maps));
@@ -293,6 +296,10 @@ void wl_renderer_shutdown(WlRenderer *r)
             UnloadMesh(s_crack_mesh[i]);
             s_crack_ok[i] = false;
         }
+    }
+    if (r->preview_ok) {
+        UnloadRenderTexture(r->preview_rt);
+        r->preview_ok = false;
     }
     memset(&r->mat_ent, 0, sizeof(r->mat_ent));
     memset(&r->mat_item, 0, sizeof(r->mat_item));
@@ -909,22 +916,38 @@ void wl_renderer_draw_held_item(WlRenderer *r, struct WlWorld *w, const struct W
         const WlBlock *b = wl_block_get(def->block_id);
         is_cube = (b && b->shape != WL_RENDER_CROSS && !is_torch);
     }
-    float fwd_off, right_off, down_off, scale, grip_z;
-    /* keep the item inside the frustum: at fwd 0.85, offsets of 0.38
-     * right / 0.40 down stay under ~25 degrees of axis, inside the 55
-     * degree vertical fov with margin for the swing arc and bob */
-    if (is_tool || is_torch) {
-        fwd_off = 0.85f; right_off = 0.38f; down_off = 0.40f;
-        scale = 0.62f;  grip_z = 0.90f;   /* Z roll: handle across the palm */
+    /* ---- viewmodel: a stable CAMERA-SPACE anchor ----
+     * The held item is attached to the camera basis (not the yaw alone):
+     * looking up or down rotates the world, never the tool. Hierarchy:
+     * camera orientation -> fixed anchor -> per-tool grip pose -> model
+     * scale -> animation offsets on top. */
+    float pose_x, pose_y, pose_z, scale;
+    Vector3 anchor = { 0.40f, -0.42f, -0.88f }; /* right, down, forward */
+    if (is_torch) {
+        pose_x = -0.15f; pose_y = 0.0f; pose_z = -0.25f; scale = 0.62f;
+    } else if (is_tool) {
+        switch (def->tool) {
+        case WL_TOOL_SWORD:
+            pose_x = -0.25f; pose_y = 0.15f; pose_z = -0.20f; scale = 0.66f;
+            break;
+        case WL_TOOL_AXE:
+            pose_x = -0.45f; pose_y = 0.50f; pose_z = -0.35f; scale = 0.62f;
+            break;
+        case WL_TOOL_SHOVEL:
+            pose_x = -0.50f; pose_y =  0.0f; pose_z = -0.35f; scale = 0.62f;
+            break;
+        default: /* pickaxe */
+            pose_x = -0.55f; pose_y = -0.15f; pose_z = -0.40f; scale = 0.62f;
+            break;
+        }
     } else if (is_cube) {
-        fwd_off = 0.85f; right_off = 0.42f; down_off = 0.34f;
-        scale = 0.30f;  grip_z = 0.35f;
+        pose_x = 0.45f; pose_y = 0.65f; pose_z = 0.0f; scale = 0.30f;
     } else {
-        fwd_off = 0.85f; right_off = 0.33f; down_off = 0.33f;
-        scale = 0.42f;  grip_z = 0.45f;
+        /* extruded sprite (food, materials): face the camera, tilted */
+        pose_x = -0.35f; pose_y = 0.0f; pose_z = -0.15f; scale = 0.42f;
     }
 
-    /* movement bob mirrors the player's walk cycle */
+    /* ---- animation offsets: driven by player state, never mouse ---- */
     float bob_amt = p->bob_amount;
     float bob_x = sinf(p->bob_phase) * 0.030f * bob_amt;
     float bob_y = -fabsf(cosf(p->bob_phase)) * 0.024f * bob_amt;
@@ -934,24 +957,50 @@ void wl_renderer_draw_held_item(WlRenderer *r, struct WlWorld *w, const struct W
     /* sway from the damped spring (small, never 1:1 with the mouse) */
     float sway_x = r->held.yaw_kick * 0.11f;
     float sway_y = r->held.pitch_kick * 0.09f;
-    /* swing arc around the grip */
     float swing_ph = (r->held.swing > 0.0f)
                          ? sinf((1.0f - r->held.swing) * PI) : 0.0f;
-    float swing_rot = -swing_ph * 1.30f;
     float land_dip = r->held.land * r->held.land * 0.11f;
     float equip_dip = r->held.equip * r->held.equip * 0.20f;
 
-    Vector3 pos = Vector3Add(r->cam.position, Vector3Scale(f, fwd_off));
-    pos = Vector3Add(pos, Vector3Scale(right,
-                 right_off + bob_x * 0.7f + sway_x));
-    pos.y += -down_off + bob_y + idle_y + sway_y - land_dip - equip_dip;
+    /* swing arc: tools chop forward around the grip; swords sweep wider
+     * with a slight twist; food is raised toward the face instead */
+    float swing_x = 0.0f, swing_y = 0.0f, swing_adv = 0.0f;
+    if (def->food > 0 && !is_tool) {
+        swing_x = swing_ph * 0.55f;   /* lift to the mouth */
+        swing_adv = swing_ph * 0.22f; /* and closer to the camera */
+    } else if (is_tool && def->tool == WL_TOOL_SWORD) {
+        swing_x = -swing_ph * 1.55f;
+        swing_y = swing_ph * 0.45f;
+    } else {
+        swing_x = -swing_ph * 1.35f;
+    }
 
-    /* rotation: orient to the camera, grip tilt, then swing/bob on top */
-    Matrix tf = MatrixMultiply(MatrixScale(scale, scale, scale),
-                               MatrixRotateX(swing_rot + r->held.land * 0.28f));
-    tf = MatrixMultiply(tf, MatrixRotateZ(grip_z + idle_roll + bob_x * 0.55f));
-    tf = MatrixMultiply(tf, MatrixRotateY(cam_yaw + PI));
-    tf = MatrixMultiply(tf, MatrixTranslate(pos.x, pos.y, pos.z));
+    /* the anchor absorbs bob, sway, landing and equipping so the pose
+     * itself stays a pure grip */
+    anchor.x += bob_x * 0.7f + sway_x;
+    anchor.y += bob_y + idle_y + sway_y - land_dip - equip_dip;
+    anchor.z += swing_adv;
+
+    /* camera-space -> world: rows of the camera basis (right, up,
+     * back). A point at (px,py,pz) in camera space lands at
+     * cam_pos + px*right + py*up + pz*back. */
+    Vector3 cam_up = Vector3CrossProduct(right, f);
+    Matrix cam_to_world = {
+        right.x, right.y, right.z, 0.0f,
+        cam_up.x, cam_up.y, cam_up.z, 0.0f,
+        -f.x, -f.y, -f.z, 0.0f,
+        r->cam.position.x, r->cam.position.y, r->cam.position.z, 1.0f,
+    };
+
+    /* model -> grip pose -> camera anchor -> world */
+    Matrix tf = MatrixScale(scale, scale, scale);
+    tf = MatrixMultiply(tf, MatrixRotateX(pose_x + swing_x +
+                                          r->held.land * 0.28f));
+    tf = MatrixMultiply(tf, MatrixRotateY(pose_y + swing_y));
+    tf = MatrixMultiply(tf, MatrixRotateZ(pose_z + idle_roll +
+                                          bob_x * 0.55f));
+    tf = MatrixMultiply(tf, MatrixTranslate(anchor.x, anchor.y, anchor.z));
+    tf = MatrixMultiply(tf, cam_to_world);
 
     /* never buried in terrain: flush, clear depth, then draw on top of
      * everything while still lighting it like the world. A held torch
@@ -981,6 +1030,8 @@ enum {
     ET_CHICKEN_BODY, ET_CHICKEN_HEAD, ET_CHICKEN_LEG, ET_CHICKEN_WING,
     ET_SHEEP_BODY, ET_SHEEP_HEAD, ET_SHEEP_LEG,
     ET_ARROW,
+    /* player preview skin (inventory character screen) */
+    ET_PLAYER_HEAD, ET_PLAYER_BODY, ET_PLAYER_LIMB,
     ET_COUNT
 };
 
@@ -1396,6 +1447,175 @@ void wl_renderer_draw_entities(WlRenderer *r, WlWorld *w)
     EndMode3D();
 }
 
+
+/* ------------------------------------------------------------------ */
+/* inventory character preview                                         */
+/* ------------------------------------------------------------------ */
+
+/* armor material tints, matching the icons and the held-tool palette */
+static void armor_tint(WlItemId item, unsigned char *r_, unsigned char *g_,
+                       unsigned char *b_)
+{
+    const WlItem *def = wl_item_get(item);
+    if (!def || !def->armor_slot) { *r_ = *g_ = *b_ = 0; return; }
+    if (strstr(def->name, "leather")) { *r_ = 146; *g_ = 100; *b_ = 64; }
+    else if (strstr(def->name, "diamond")) { *r_ = 104; *g_ = 228; *b_ = 216; }
+    else { *r_ = 224; *g_ = 224; *b_ = 222; } /* iron */
+}
+
+Texture2D wl_renderer_player_preview(WlRenderer *r, const WlSlot armor[4],
+                                     float yaw)
+{
+    Texture2D empty = { 0 };
+    if (!r || !r->preview_ok) return empty;
+
+    BeginTextureMode(r->preview_rt);
+    ClearBackground((Color){ 34, 36, 42, 255 });
+
+    Camera3D cam = { 0 };
+    cam.position = (Vector3){ 0.0f, 1.35f, 2.6f };
+    cam.target = (Vector3){ 0.0f, 0.95f, 0.0f };
+    cam.up = (Vector3){ 0.0f, 1.0f, 0.0f };
+    cam.fovy = 42.0f;
+    cam.projection = CAMERA_PERSPECTIVE;
+    BeginMode3D(cam);
+
+    /* layered-box player silhouette, matching the mob proportions.
+     * Rendered as solid-colour boxes through the white atlas tile (not
+     * the entity-atlas part meshes) so the preview is identical on
+     * every GL driver. */
+    struct { Vector3 off, size; unsigned char r, g, b; } parts[] = {
+        { { 0.00f, 1.05f, 0.00f }, { 0.50f, 0.70f, 0.28f }, 64, 132, 148 },  /* shirt   */
+        { { 0.00f, 1.48f, 0.00f }, { 0.50f, 0.50f, 0.50f }, 214, 172, 138 }, /* head    */
+        { { -0.14f, 0.375f, 0.0f }, { 0.20f, 0.75f, 0.20f }, 70, 88, 152 },  /* legs    */
+        { { 0.14f, 0.375f, 0.0f }, { 0.20f, 0.75f, 0.20f }, 70, 88, 152 },
+        { { -0.35f, 1.05f, 0.0f }, { 0.20f, 0.65f, 0.20f }, 214, 172, 138 }, /* arms    */
+        { { 0.35f, 1.05f, 0.0f }, { 0.20f, 0.65f, 0.20f }, 214, 172, 138 },
+    };
+    ent_set_uniforms(r, 1.0f, 0.0f);
+    for (size_t i = 0; i < sizeof(parts) / sizeof(parts[0]); i++) {
+        /* one cached tinted cube per distinct body colour */
+        static Mesh s_body[3] = { 0 };
+        static const unsigned char k_col[3][3] = {
+            { 64, 132, 148 }, { 214, 172, 138 }, { 70, 88, 152 }
+        };
+        int ci = (parts[i].r == k_col[0][0]) ? 0
+               : (parts[i].r == k_col[1][0]) ? 1 : 2;
+        if (s_body[ci].vertexCount == 0) {
+            float *pos = malloc(24 * 3 * sizeof(float));
+            float *uv = malloc(24 * 2 * sizeof(float));
+            unsigned char *col = malloc(24 * 4);
+            unsigned short *ix = malloc(36 * sizeof(unsigned short));
+            if (pos && uv && col && ix) {
+                int vc = 0, ic = 0;
+                solid_box(pos, uv, col, ix, &vc, &ic, 0, 0, 0,
+                          0.5f, 0.5f, 0.5f,
+                          k_col[ci][0], k_col[ci][1], k_col[ci][2]);
+                s_body[ci].vertexCount = vc;
+                s_body[ci].triangleCount = ic / 3;
+                s_body[ci].vertices = pos;
+                s_body[ci].texcoords = uv;
+                s_body[ci].colors = col;
+                s_body[ci].indices = ix;
+                UploadMesh(&s_body[ci], false);
+            }
+        }
+        if (s_body[ci].vertexCount == 0) continue;
+        Matrix tf = MatrixMultiply(
+            MatrixScale(parts[i].size.x, parts[i].size.y, parts[i].size.z),
+            MatrixTranslate(parts[i].off.x, parts[i].off.y, parts[i].off.z));
+        tf = MatrixMultiply(tf, MatrixRotateY(yaw));
+        DrawMesh(s_body[ci], r->mat_item, tf);
+    }
+
+    /* worn armor: slightly inflated boxes tinted by material, drawn
+     * with the white atlas tile through the item material */
+    for (int piece = 0; piece < 4; piece++) {
+        if (armor[piece].item == WL_ITEM_NONE) continue;
+        unsigned char cr, cg, cb;
+        armor_tint(armor[piece].item, &cr, &cg, &cb);
+        Vector3 off, size;
+        float inf = 1.16f;
+        switch (piece) {
+        case 0: off = parts[1].off; size = parts[1].size; break; /* head */
+        case 1: off = parts[0].off; size = parts[0].size; break; /* body */
+        case 2: /* legs: one box around both legs */
+            off = (Vector3){ 0.0f, 0.56f, 0.0f };
+            size = (Vector3){ 0.52f, 0.60f, 0.28f };
+            break;
+        default: /* boots: lower half of the legs */
+            off = (Vector3){ 0.0f, 0.16f, 0.0f };
+            size = (Vector3){ 0.54f, 0.30f, 0.30f };
+            break;
+        }
+        const Mesh *m = item_mesh(r, 0); /* any cube mesh works: scaled below */
+        /* build a tinted cube via the solid-white tile + vertex colour:
+         * reuse solid_box through a small temp mesh */
+        static Mesh s_armor_cube = { 0 };
+        if (s_armor_cube.vertexCount == 0) {
+            float *pos = malloc(24 * 3 * sizeof(float));
+            float *uv = malloc(24 * 2 * sizeof(float));
+            unsigned char *col = malloc(24 * 4);
+            unsigned short *ix = malloc(36 * sizeof(unsigned short));
+            if (pos && uv && col && ix) {
+                int vc = 0, ic = 0;
+                solid_box(pos, uv, col, ix, &vc, &ic,
+                          0, 0, 0, 0.5f, 0.5f, 0.5f, cr, cg, cb);
+                s_armor_cube.vertexCount = vc;
+                s_armor_cube.triangleCount = ic / 3;
+                s_armor_cube.vertices = pos;
+                s_armor_cube.texcoords = uv;
+                s_armor_cube.colors = col;
+                s_armor_cube.indices = ix;
+                UploadMesh(&s_armor_cube, false);
+            }
+        }
+        if (s_armor_cube.vertexCount > 0) {
+            /* per-piece tint: vertex colours are baked, so tint via a
+             * small set of pre-baked cubes per material instead */
+            static Mesh s_cubes[3] = { 0 };
+            int mat_idx = 0;
+            const WlItem *ad = wl_item_get(armor[piece].item);
+            if (ad) {
+                if (strstr(ad->name, "leather")) mat_idx = 0;
+                else if (strstr(ad->name, "diamond")) mat_idx = 2;
+                else mat_idx = 1;
+            }
+            if (s_cubes[mat_idx].vertexCount == 0) {
+                float *pos = malloc(24 * 3 * sizeof(float));
+                float *uv = malloc(24 * 2 * sizeof(float));
+                unsigned char *col = malloc(24 * 4);
+                unsigned short *ix = malloc(36 * sizeof(unsigned short));
+                unsigned char tr, tg, tb;
+                WlItemId probe = mat_idx == 0 ? WL_ITEM_LEATHER_HELMET
+                                 : mat_idx == 2 ? WL_ITEM_DIAMOND_HELMET
+                                                : WL_ITEM_IRON_HELMET;
+                armor_tint(probe, &tr, &tg, &tb);
+                int vc = 0, ic = 0;
+                solid_box(pos, uv, col, ix, &vc, &ic,
+                          0, 0, 0, 0.5f, 0.5f, 0.5f, tr, tg, tb);
+                s_cubes[mat_idx].vertexCount = vc;
+                s_cubes[mat_idx].triangleCount = ic / 3;
+                s_cubes[mat_idx].vertices = pos;
+                s_cubes[mat_idx].texcoords = uv;
+                s_cubes[mat_idx].colors = col;
+                s_cubes[mat_idx].indices = ix;
+                UploadMesh(&s_cubes[mat_idx], false);
+            }
+            (void)inf;
+            Matrix tf = MatrixMultiply(
+                MatrixScale(size.x * inf, size.y * inf, size.z * inf),
+                MatrixTranslate(off.x, off.y, off.z));
+            tf = MatrixMultiply(tf, MatrixRotateY(yaw));
+            DrawMesh(s_cubes[mat_idx], r->mat_item, tf);
+        }
+        (void)m;
+    }
+
+    EndMode3D();
+    EndTextureMode();
+    return r->preview_rt.texture;
+}
 
 /* ------------------------------------------------------------------ */
 /* block-breaking overlay                                              */

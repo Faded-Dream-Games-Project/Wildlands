@@ -175,6 +175,34 @@ wl_game_run_frame
   and a fall-over death animation are driven by entity state
   (`anim_phase`, `live_ticks`, `death_timer`).
 
+## Viewmodel (held items)
+
+- The held item is composed as: model scale -> per-tool grip pose ->
+  fixed camera-space anchor -> camera basis matrix -> world. Because the
+  anchor rides the full camera basis (not just yaw), looking up/down
+  rotates the world, never the tool. Mouse movement only feeds a damped
+  lag spring on the anchor.
+- Tool poses differ per kind (pickaxe/axe/shovel/sword/torch/food);
+  swings are retriggered by `WlPlayer::action_swing` and mining state,
+  never by raw mouse delta.
+
+## Armor
+
+- `WlItem` carries `armor_slot` (1-4) and `armor_points`; `WlPlayer`
+  has `WlSlot armor[4]`. Damage applies `amount * (1 - min(0.8,
+  points * 0.04))`, every worn piece loses 1 durability per hit and is
+  removed at zero. Armor slots only accept the matching piece and
+  persist via `armor.N` lines in player.dat.
+
+## Farming
+
+- Farmland and the three wheat stages live at fixed block ids (231-234,
+  like the water flows) with textures at fixed atlas slots, so mod ids
+  never shift. Wheat growth reuses the scheduled water-update queue:
+  each due tick advances a stage (~18-37s with position jitter); the
+  mature stage drops wheat + seeds. Tall grass drops seeds; hoes till
+  grass/dirt; bread bakes from three wheat.
+
 ## Audio
 
 - `src/audio/audio.c`: graceful (runs silent without a device), four

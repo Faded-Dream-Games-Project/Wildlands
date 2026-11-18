@@ -51,8 +51,42 @@ static const WlBlock s_water_flow_def = {
     .unbreakable = true,
 };
 
+/* farmland + the three wheat growth stages (fixed high ids, see
+ * block.h): farmland is a solid tilled soil block, wheat grows as a
+ * cross-shaped plant that hardens through three stages */
+static const WlBlock s_farmland_def = {
+    .name = "farmland", .display = "Farmland",
+    .tex = { TILE_FARMLAND, TILE_FARMLAND, TILE_DIRT,
+             TILE_DIRT, TILE_FARMLAND, TILE_FARMLAND },
+    .shape = WL_RENDER_SOLID, .solid = true, .opaque = true,
+    .hardness = 3, .tool = WL_TOOL_SHOVEL, .tool_tier = 0,
+    .drop_item = WL_BLOCK_DIRT, .drop_count = 1,
+};
+static const WlBlock s_wheat_defs[3] = {
+    { .name = "wheat_sprout", .display = "Wheat (sprout)",
+      .tex = { TILE_WHEAT_STAGE1, TILE_WHEAT_STAGE1, TILE_WHEAT_STAGE1,
+               TILE_WHEAT_STAGE1, TILE_WHEAT_STAGE1, TILE_WHEAT_STAGE1 },
+      .shape = WL_RENDER_CROSS, .solid = false, .opaque = false,
+      .hardness = 0, .drop_item = WL_ITEM_SEEDS, .drop_count = 1 },
+    { .name = "wheat_mid", .display = "Wheat",
+      .tex = { TILE_WHEAT_STAGE2, TILE_WHEAT_STAGE2, TILE_WHEAT_STAGE2,
+               TILE_WHEAT_STAGE2, TILE_WHEAT_STAGE2, TILE_WHEAT_STAGE2 },
+      .shape = WL_RENDER_CROSS, .solid = false, .opaque = false,
+      .hardness = 0, .drop_item = WL_ITEM_SEEDS, .drop_count = 1 },
+    { .name = "wheat_mature", .display = "Wheat",
+      .tex = { TILE_WHEAT_STAGE3, TILE_WHEAT_STAGE3, TILE_WHEAT_STAGE3,
+               TILE_WHEAT_STAGE3, TILE_WHEAT_STAGE3, TILE_WHEAT_STAGE3 },
+      .shape = WL_RENDER_CROSS, .solid = false, .opaque = false,
+      .hardness = 0, .drop_item = WL_ITEM_WHEAT, .drop_count = 1 },
+};
+
 const WlBlock *wl_block_get(WlBlockId id)
 {
+    if (id == WL_BLOCK_FARMLAND) return &s_farmland_def;
+    {
+        int st = wl_wheat_stage(id);
+        if (st > 0) return &s_wheat_defs[st - 1];
+    }
     if (wl_water_flow_level(id) > 0) return &s_water_flow_def;
     if (id == 0 || id >= g_block_count) return NULL;
     return &g_blocks[id];
@@ -289,7 +323,7 @@ void wl_blocks_init(void)
     reg(WL_BLOCK_TALLGRASS, (WlBlock){
         .name = "tall_grass", .display = "Tall Grass", .tex = T6(TILE_TALLGRASS),
         .shape = WL_RENDER_CROSS, .solid = false, .opaque = false,
-        .hardness = 0, .drop_item = WL_ITEM_NONE,
+        .hardness = 0, .drop_item = WL_ITEM_SEEDS,
     });
 
     reg(WL_BLOCK_FURNACE, (WlBlock){
@@ -297,7 +331,7 @@ void wl_blocks_init(void)
         .tex = T6T4(TILE_FURNACE_FRONT, TILE_FURNACE_SIDE, TILE_FURNACE_TOP),
         .shape = WL_RENDER_SOLID, .solid = true, .opaque = true,
         .hardness = 16, .tool = WL_TOOL_PICKAXE,
-        .drop_item = WL_BLOCK_FURNACE, .drop_count = 1,
+        .drop_item = WL_ITEM_SEEDS, .drop_count = 1,
     });
 
     reg(WL_BLOCK_FURNACE_LIT, (WlBlock){
@@ -317,4 +351,9 @@ void wl_blocks_init(void)
 bool wl_blocks_liquid(uint8_t id)
 {
     return id == WL_BLOCK_WATER || wl_water_flow_level(id) > 0;
+}
+
+bool wl_blocks_wheat(uint8_t id)
+{
+    return wl_wheat_stage(id) > 0;
 }

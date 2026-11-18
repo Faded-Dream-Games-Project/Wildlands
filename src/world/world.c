@@ -438,6 +438,23 @@ void wl_world_schedule_water(WlWorld *w, int x, int y, int z, float delay)
     w->water_qn++;
 }
 
+/* wheat shares the scheduled-update queue with water: on each due tick
+ * an immature crop advances one stage; the mature stage stops
+ * scheduling, so growth always terminates */
+static void wheat_process(WlWorld *w, int x, int y, int z)
+{
+    uint8_t id = wl_world_get_block(w, x, y, z);
+    int stage = wl_wheat_stage(id);
+    if (stage <= 0 || stage >= 3) return;
+    /* still farmland below and open air above, else it stays put */
+    if (wl_world_get_block(w, x, y - 1, z) != WL_BLOCK_FARMLAND) return;
+    if (wl_world_get_block(w, x, y + 1, z) != WL_BLOCK_AIR) return;
+    wl_world_set_block(w, x, y, z, wl_wheat_id(stage + 1));
+    if (stage + 1 < 3)
+        wl_world_schedule_water(w, x, y, z,
+                                18.0f + (float)((x * 31 + z * 17) % 97) * 0.2f);
+}
+
 /* processes one water cell: dries orphaned flows, pours down, spreads
  * sideways with decreasing level. Levels decrease monotonically along
  * any spread path, so propagation is finite by construction. */
@@ -445,7 +462,10 @@ static void water_process(WlWorld *w, int x, int y, int z)
 {
     uint8_t id = wl_world_get_block(w, x, y, z);
     int lvl = water_level_of(id);
-    if (lvl == 0) return;
+    if (lvl == 0) {
+        wheat_process(w, x, y, z);
+        return;
+    }
 
     /* flow without a supplier dries up (source removal) */
     if (lvl < 8) {
@@ -509,6 +529,7 @@ int wl_world_water_pending(const WlWorld *w)
 
 void wl_world_water_tick(WlWorld *w, float dt)
 {
+    /* wheat growth rides the same queue (see wheat_process) */
     if (!w) return;
     w->water_time += dt;
     int budget = 96; /* bounded work per frame */

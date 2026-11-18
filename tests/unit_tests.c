@@ -7,6 +7,7 @@
 #include "wl/noise.h"
 #include "wl/worldgen.h"
 #include "wl/block.h"
+#include "wl/player.h"
 #include "wl/item.h"
 #include "wl/inventory.h"
 #include "wl/crafting.h"
@@ -670,6 +671,26 @@ static void water_settle(WlWorld *w)
     }
 }
 
+static void test_cancel_actions(void)
+{
+    WlPlayer p;
+    memset(&p, 0, sizeof(p));
+    p.break_progress = 0.63;
+    p.break_id = 5;
+    p.action_swing = 0.28f;
+    p.eat_timer = 1.1f;
+    p.break_cooldown = 0.4f;
+    wl_player_cancel_actions(&p);
+    CHECK(p.break_progress == 0.0);
+    CHECK(p.break_id == 0);
+    CHECK(p.action_swing == 0.0f);
+    CHECK(p.eat_timer == 0.0f);
+    CHECK(p.break_cooldown == 0.0f);
+    /* a NaN progress value is also rejected by the guard in interact */
+    p.break_progress = 0.0 / 0.0;
+    CHECK(!(p.break_progress >= 0.0 && p.break_progress < 1.0));
+}
+
 static void test_water(void)
 {
     const char *dir = "tests/.tmp-water";
@@ -803,6 +824,7 @@ int main(void)
     test_input_seams();
     test_drops_and_partial_add();
     test_water();
+    test_cancel_actions();
 
     printf("unit tests: %d run, %d failed\r\n", tests_run, tests_failed);
     return tests_failed ? 1 : 0;

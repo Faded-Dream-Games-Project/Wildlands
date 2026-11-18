@@ -434,7 +434,13 @@ HANDLE = (109, 85, 50)
 
 
 def t_tool(kind, tier):
+    """Bold readable tool icons: 3px-thick strokes, clear silhouettes,
+    tier colours matching the 3D held models exactly (see tier_color
+    in renderer.c) so icon and held item always agree."""
     head = TIER_COLORS[tier]
+    # per-face shading of the head, like the 3D box faces
+    head_hi = tuple(min(255, int(c * 1.12)) for c in head)
+    head_lo = tuple(int(c * 0.72) for c in head)
     a = np.zeros((16, 16, 4), np.uint8)
 
     def px(x, y, c):
@@ -442,47 +448,68 @@ def t_tool(kind, tier):
             a[y, x, :3] = c
             a[y, x, 3] = 255
 
-    def handle(x0, y0, x1, y1):
+    def bar(x0, y0, x1, y1, c, w=3):
+        """thick diagonal stroke with a darker right/bottom edge"""
         n = max(abs(x1 - x0), abs(y1 - y0))
         for i in range(n + 1):
             t = i / max(1, n)
             x = int(round(x0 + (x1 - x0) * t))
             y = int(round(y0 + (y1 - y0) * t))
-            px(x, y, HANDLE)
-            px(x + 1, y, (88, 68, 40))
+            for o in range(w):
+                px(x - o, y + o // 2, c)
+            px(x + 1, y + (w - 1) // 2 + 1, (70, 52, 32))  # depth edge
 
     if kind == "pick":
-        handle(4, 11, 11, 4)
-        for x in range(3, 13):
-            px(x, 2, head)
-        px(2, 3, head); px(3, 3, head); px(12, 3, head); px(13, 3, head)
-        px(2, 4, head); px(13, 4, head)
-        px(2, 5, head); px(13, 5, head)
+        bar(3, 12, 11, 4, HANDLE)
+        # curved crossbar head: thick arc across the top-left corner
+        for x in range(2, 12):
+            px(x, 2, head); px(x, 3, head)
+        px(11, 3, head); px(11, 4, head); px(12, 3, head_hi)
+        px(1, 4, head); px(1, 5, head); px(2, 4, head_hi)
+        px(1, 3, head_hi); px(12, 4, head_lo)
+        for x in range(3, 11):
+            px(x, 4, head_lo)          # underside shading
+        px(12, 5, head_lo); px(13, 4, head_lo)
+        px(0, 5, head_lo); px(0, 6, head_lo)
     elif kind == "axe":
-        handle(4, 12, 10, 5)
-        for y in range(1, 7):
-            for x in range(6, 12):
-                if (x - 8) + (y - 3) < 5 and (x - 8) + (y - 3) > -3 and y > 1:
-                    px(x, y, head)
-        px(6, 1, head); px(7, 1, head)
+        bar(3, 13, 10, 6, HANDLE)
+        # chunky blade block hanging off the handle top
+        for y in range(1, 8):
+            for x in range(7, 13):
+                if (x - 12) + (y - 1) >= -1 and y < 7 and x < 13:
+                    px(x, y, head if x < 11 else head_hi)
+        for x in range(8, 13):
+            px(x, 7, head_lo)          # blade bottom edge
+        px(7, 2, head); px(7, 3, head); px(7, 4, head)
     elif kind == "shovel":
-        handle(4, 12, 10, 5)
-        for y in range(0, 6):
-            for x in range(8, 14):
-                if abs(x - 11) + abs(y - 3) < 5:
+        bar(3, 13, 9, 7, HANDLE)
+        # rounded spade head at the top-right
+        for y in range(1, 8):
+            for x in range(7, 14):
+                if abs(x - 10.5) + abs(y - 4) < 5.2:
                     px(x, y, head)
+        for y in range(5, 8):          # underside shading
+            for x in range(8, 13):
+                if abs(x - 10.5) + abs(y - 4) < 5.2:
+                    px(x, y, head_lo)
+        px(10, 0, head_hi); px(11, 0, head_hi); px(9, 0, head_hi)
     elif kind == "sword":
+        # 2px diagonal blade with a bright edge highlight
         for i in range(8):
-            x, y = 4 + i, 12 - i
+            x, y = 4 + i, 11 - i
             px(x, y, head)
-            px(x + 1, y - 1, head)
-        px(4, 13, (60, 50, 40)); px(3, 14, HANDLE)
-        px(5, 13, (180, 160, 90)); px(3, 11, (180, 160, 90)); px(6, 13, (180, 160, 90)); px(4, 11, (180, 160, 90))
+            px(x + 1, y, head_lo)
+            px(x, y - 1, head_hi)
+        px(12, 3, head_hi); px(13, 2, head_hi)
+        # crossguard
+        for gx in range(3, 9):
+            px(gx, 13, (196, 168, 86))
+        px(4, 12, (196, 168, 86)); px(8, 12, (196, 168, 86))
+        # grip + pommel
+        px(3, 14, HANDLE); px(2, 15, HANDLE)
+        px(4, 15, (110, 82, 48)); px(3, 15, HANDLE)
     return a
 
-
-
-# ---- furnace + food/material/crack/arrow painters (order matches tiles.h) ----
 
 def t_furnace_side():
     a = t_stone()
@@ -808,12 +835,215 @@ TILE_PAINTERS += [
 
 
 
+# --------------------------------------------------------------------
+# armor / hoe / farming painters (fixed high atlas slots, see tiles.h)
+
+ARM_TIER_COLORS = {
+    "leather": (146, 100, 64),
+    "iron": (224, 224, 222),
+    "diamond": (104, 228, 216),
+}
+
+
+def _shaded(c, f):
+    return tuple(min(255, max(0, int(v * f))) for v in c)
+
+
+def t_armor(kind, mat):
+    """armor piece icons with a consistent bold style"""
+    c = ARM_TIER_COLORS[mat]
+    hi, lo = _shaded(c, 1.15), _shaded(c, 0.65)
+    a = np.zeros((16, 16, 4), np.uint8)
+
+    def px(x, y, col):
+        if 0 <= x < 16 and 0 <= y < 16:
+            a[y, x, :3] = col
+            a[y, x, 3] = 255
+
+    if kind == "helm":
+        for y in range(3, 9):
+            for x in range(4, 12):
+                if abs(x - 7.5) + (y - 3) < 6.5:
+                    px(x, y, c)
+        for x in range(2, 14):        # brim
+            px(x, 9, c); px(x, 10, lo)
+        for x in range(5, 11):        # face opening
+            for y in range(6, 9):
+                px(x, y, hi if y == 6 else (0, 0, 0, ))
+        for x in range(4, 12):
+            px(x, 3, hi)
+    elif kind == "chest":
+        for y in range(2, 13):
+            for x in range(5, 11):
+                px(x, y, c)
+        for y in range(2, 5):         # shoulder plates
+            for x in range(3, 5):
+                px(x, y, c)
+            for x in range(11, 13):
+                px(x, y, c)
+        for x in range(6, 10):        # neck gap
+            px(x, 2, (0, 0, 0))
+            a[2, x, 3] = 0
+        for x in range(5, 11):
+            px(x, 3, hi)
+        for x in range(5, 11):
+            px(x, 12, lo)
+    elif kind == "legs":
+        for x in range(4, 12):        # belt
+            px(x, 2, c); px(x, 3, c)
+        for y in range(3, 14):
+            for x in range(4, 7):
+                px(x, y, c)
+            for x in range(9, 12):
+                px(x, y, c)
+        for x in range(4, 7):
+            px(x, 3, hi)
+        for x in range(9, 12):
+            px(x, 13, lo)
+        for x in range(4, 12):
+            px(x, 4, hi)
+    elif kind == "boots":
+        for y in range(7, 12):
+            for x in range(3, 7):
+                px(x, y, c)
+            for x in range(9, 13):
+                px(x, y, c)
+        for x in range(3, 8):         # soles
+            px(x, 12, lo)
+        for x in range(9, 14):
+            px(x, 12, lo)
+        for x in range(3, 7):
+            px(x, 7, hi)
+        for x in range(9, 13):
+            px(x, 7, hi)
+    return a
+
+
+def t_hoe_icon(tier):
+    head = TIER_COLORS[tier]
+    a = np.zeros((16, 16, 4), np.uint8)
+
+    def px(x, y, c):
+        if 0 <= x < 16 and 0 <= y < 16:
+            a[y, x, :3] = c
+            a[y, x, 3] = 255
+
+    # diagonal handle
+    n = 10
+    for i in range(n + 1):
+        x, y = 3 + i, 12 - i
+        for o in range(3):
+            px(x - o, y + o // 2, HANDLE)
+        px(x + 1, y + 1, (70, 52, 32))
+    # small L-blade at the top
+    for x in range(8, 14):
+        px(x, 2, head); px(x, 3, head)
+    for y in range(3, 7):
+        px(12, y, head); px(13, y, _shaded(head, 1.12))
+    for x in range(9, 13):
+        px(x, 4, _shaded(head, 0.7))
+    return a
+
+
+def t_wheat_item():
+    a = np.zeros((16, 16, 4), np.uint8)
+    g, gh = (196, 168, 66), (222, 198, 92)
+    for stalk, x0 in ((2, 5), (6, 8), (2, 11)):
+        for i in range(10):
+            x, y = x0 + (i // 6), 14 - i
+            if 0 <= x < 16 and 0 <= y < 16:
+                a[y, x, :3] = g
+                a[y, x, 3] = 255
+        for dy in range(4):           # grain heads
+            for dx in range(3):
+                x, y = x0 - 1 + dx, 2 + dy
+                if 0 <= x < 16 and 0 <= y < 16:
+                    a[y, x, :3] = gh
+                    a[y, x, 3] = 255
+    return a
+
+
+def t_seeds_icon():
+    a = np.zeros((16, 16, 4), np.uint8)
+    rng = np.random.default_rng(7)
+    c, c2 = (116, 172, 74), (88, 140, 56)
+    for _ in range(14):
+        x, y = int(rng.integers(3, 13)), int(rng.integers(3, 13))
+        a[y, x, :3] = c if (x + y) % 3 else c2
+        a[y, x, 3] = 255
+        a[y + 1, x, :3] = c2
+        a[y + 1, x, 3] = 255
+    return a
+
+
+def t_bread_icon():
+    a = np.zeros((16, 16, 4), np.uint8)
+    cr, crh, crl = (168, 116, 62), (198, 148, 88), (128, 84, 42)
+    for y in range(5, 12):
+        for x in range(2, 14):
+            if abs(x - 7.5) / 6.0 + abs(y - 8) / 3.6 < 1.0:
+                a[y, x, :3] = cr
+                a[y, x, 3] = 255
+    for x in range(4, 12):            # lighter top
+        a[5, x, :3] = crh
+        a[6, x, :3] = crh if x % 3 else cr
+    for x in range(3, 13):
+        a[11, x, :3] = crl
+    for sx, sy in ((5, 7), (8, 7), (11, 8), (6, 9)):  # scores
+        a[sy, sx, :3] = crl
+    return a
+
+
+def t_farmland():
+    a = np.zeros((16, 16, 4), np.uint8)
+    soil, row = (96, 66, 44), (62, 40, 26)
+    a[:, :, :3] = soil
+    a[:, :, 3] = 255
+    for y in (2, 7, 12):              # tilled rows
+        a[y, :, :3] = row
+        a[y + 1, ::2, :3] = (76, 52, 34)
+    rng = np.random.default_rng(3)    # speckles
+    for _ in range(26):
+        x, y = int(rng.integers(0, 16)), int(rng.integers(0, 16))
+        a[y, x, :3] = (112, 80, 54)
+    return a
+
+
+def t_wheat_stage(stage):
+    """stage 1 sprout / 2 mid green / 3 mature golden"""
+    a = np.zeros((16, 16, 4), np.uint8)
+    green, dark = (96, 156, 62), (58, 110, 42)
+    gold, goldh = (202, 176, 72), (228, 206, 108)
+    h = {1: 5, 2: 10, 3: 13}[stage]
+    body = green if stage < 3 else gold
+    tip = dark if stage < 3 else goldh
+    for x0 in (2, 5, 8, 11, 14):
+        for i in range(h):
+            x, y = x0 + (1 if (i > h - 4 and x0 % 3 == 0) else 0), 15 - i
+            if 0 <= x < 16 and 0 <= y < 16:
+                a[y, x, :3] = body
+                a[y, x, 3] = 255
+        if stage >= 2:                # heads form
+            for dy in range(4 if stage == 3 else 2):
+                for dx in range(2):
+                    x, y = x0 + dx - 1 + (1 if x0 % 3 == 0 else 0), 15 - h - dy + 1
+                    if 0 <= x < 16 and 0 <= y < 16:
+                        a[y, x, :3] = tip
+                        a[y, x, 3] = 255
+    return a
+
+
+def paint_fixed(atlas_img, slot, arr):
+    col, row = slot % GRID, slot // GRID
+    atlas_img.paste(Image.fromarray(arr, "RGBA"), (col * TILE, row * TILE))
+
+
 def build_atlas():
     # cross-check against include/wl/tiles.h
     tiles_h = (ROOT / "include" / "wl" / "tiles.h").read_text()
     import re
-    names = re.findall(r"^\s+TILE_(\w+)(?:\s*=\s*\d+)?,", tiles_h, re.M)
-    names = [n.lower() for n in names if n != "BASE_COUNT"]
+    pairs = re.findall(r"^\s+TILE_(\w+)(?:\s*=\s*(\d+))?,", tiles_h, re.M)
+    names = [n.lower() for n, v in pairs if (not v or v == "0") and n != "BASE_COUNT"]
     ours = [n for n, _ in TILE_PAINTERS]
     if names != ours:
         raise SystemExit(f"tile layout mismatch!\n tiles.h: {names}\n generator: {ours}")
@@ -824,6 +1054,25 @@ def build_atlas():
     # fixed white tile (slot 250) for solid-colour box models; see tiles.h
     white = Image.new("RGBA", (TILE, TILE), (255, 255, 255, 255))
     atlas.paste(white, ((250 % 16) * TILE, (250 // 16) * TILE))
+    # armor / hoe / farming tiles at fixed high slots (see tiles.h)
+    for slot, kind, mat in [
+        (220, "helm", "leather"), (221, "chest", "leather"),
+        (222, "legs", "leather"), (223, "boots", "leather"),
+        (224, "helm", "iron"), (225, "chest", "iron"),
+        (226, "legs", "iron"), (227, "boots", "iron"),
+        (228, "helm", "diamond"), (229, "chest", "diamond"),
+        (230, "legs", "diamond"), (231, "boots", "diamond"),
+    ]:
+        paint_fixed(atlas, slot, t_armor(kind, mat))
+    for slot, tier in [(232, "wood"), (233, "stone"), (234, "iron"), (235, "diamond")]:
+        paint_fixed(atlas, slot, t_hoe_icon(tier))
+    paint_fixed(atlas, 236, t_wheat_item())
+    paint_fixed(atlas, 237, t_seeds_icon())
+    paint_fixed(atlas, 238, t_bread_icon())
+    paint_fixed(atlas, 239, t_farmland())
+    paint_fixed(atlas, 240, t_wheat_stage(1))
+    paint_fixed(atlas, 241, t_wheat_stage(2))
+    paint_fixed(atlas, 242, t_wheat_stage(3))
     out = A / "textures" / "blocks.png"
     atlas.save(out)
     print(f"wrote {out} ({len(TILE_PAINTERS)} tiles)")
@@ -1092,6 +1341,11 @@ def gen_entity_atlas():
     put("sheep_head", lambda: skin((198, 178, 152), 7, 621,
                                    lambda a: eyes(a, (30, 28, 26))))
     put("sheep_leg", lambda: skin((210, 196, 172), 6, 622))
+    # player preview skin (used by the inventory character preview)
+    put("player_head", lambda: skin((214, 172, 138), 8, 620,
+                                    lambda a: eyes(a, (40, 36, 32))))
+    put("player_body", lambda: skin((64, 132, 148), 7, 621))
+    put("player_limb", lambda: skin((70, 88, 152), 8, 622))
     put("arrow", t_arrow_icon)
 
     atlas.save(E)

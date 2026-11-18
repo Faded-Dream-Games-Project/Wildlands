@@ -58,6 +58,27 @@ Vector3 wl_player_look_dir(const WlPlayer *p)
     return (Vector3){ -sinf(p->yaw) * cp, sinf(p->pitch), -cosf(p->yaw) * cp };
 }
 
+int wl_player_armor_points(const WlPlayer *p)
+{
+    if (!p) return 0;
+    int pts = 0;
+    for (int i = 0; i < 4; i++) {
+        const WlItem *def = wl_item_get(p->armor[i].item);
+        if (def && def->armor_slot == i + 1) pts += def->armor_points;
+    }
+    return pts;
+}
+
+void wl_player_cancel_actions(WlPlayer *p)
+{
+    if (!p) return;
+    p->break_progress = 0.0;
+    p->break_id = 0; /* invalidate the target so mining restarts cleanly */
+    p->action_swing = 0.0f;
+    p->eat_timer = 0.0f;
+    p->break_cooldown = 0.0f;
+}
+
 void wl_player_apply_look(WlPlayer *p, float dx, float dy)
 {
     p->pend_x += dx;
@@ -163,6 +184,30 @@ void wl_player_damage(WlPlayer *p, float amount, struct WlAudio *audio, int diff
 {
     if (p->dead || amount <= 0.0f) return;
     if (difficulty == 0) return; /* peaceful: no damage */
+
+    /* armor: classic point formula (4% per point, capped at 80%); every
+     * worn piece loses one durability per hit and shatters at zero */
+    {
+        int pts = wl_player_armor_points(p);
+        if (pts > 0) {
+            float red = 0.04f * (float)pts;
+            if (red > 0.8f) red = 0.8f;
+            amount *= 1.0f - red;
+            for (int i = 0; i < 4; i++) {
+                WlSlot *s = &p->armor[i];
+                const WlItem *def = wl_item_get(s->item);
+                if (!def || def->armor_slot != i + 1) continue;
+                if (s->dur > 0) s->dur--;
+                if (s->dur == 0 && def->durability > 0) {
+                    WL_LOGD("armor piece broke: %s", def->name);
+                    s->item = WL_ITEM_NONE;
+                    s->count = 0;
+                    s->dur = 0;
+                }
+            }
+        }
+    }
+
     p->health -= amount;
     p->damage_flash = 0.45;
     wl_audio_play(audio, WL_SND_HURT);

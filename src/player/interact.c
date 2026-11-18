@@ -187,6 +187,10 @@ static void break_block(WlPlayer *p, WlWorld *w, const WlTarget *t,
         if (drops_allowed(slot, def) && def->drop_item != WL_ITEM_NONE)
             wl_inv_add(&p->inv, def->drop_item, def->drop_count, 0);
 
+        /* mature wheat also drops seeds so farming sustains itself */
+        if (wl_wheat_stage(t->id) >= 3)
+            wl_inv_add(&p->inv, WL_ITEM_SEEDS, 1 + ((t->x ^ t->z) & 1), 0);
+
         /* occasional apple from leaves */
         if ((t->id == WL_BLOCK_LEAVES || t->id == WL_BLOCK_BIRCH_LEAVES)) {
             uint64_t r = (uint64_t)(t->x * 73856093) ^ (uint64_t)(t->y * 19349663) ^
@@ -319,6 +323,10 @@ int wl_interact_update(WlPlayer *p, WlWorld *w, const WlConfig *cfg,
     }
 
     /* ---- breaking ---- */
+    /* NaN / out-of-range guard: a corrupted progress value must never
+     * latch the crack overlay or the swing loop on forever */
+    if (!(p->break_progress >= 0.0 && p->break_progress < 1.0))
+        p->break_progress = 0.0;
     if (mouse_left && t.valid) {
         const WlBlock *def = wl_block_get(t.id);
         if (def && !def->unbreakable) {
@@ -370,6 +378,38 @@ int wl_interact_update(WlPlayer *p, WlWorld *w, const WlConfig *cfg,
         if (p->place_cooldown <= 0.0) {
             if (try_place(p, w, &t, audio, gamemode))
                 p->place_cooldown = 0.22;
+        }
+    }
+
+    /* ---- farming: hoes till soil, seeds plant wheat ---- */
+    if (mouse_right && t.valid && held) {
+        if (held->tool == WL_TOOL_HOE && p->place_cooldown <= 0.0) {
+            /* till grass/dirt into farmland when the top is open */
+            bool tillable = (t.id == WL_BLOCK_GRASS || t.id == WL_BLOCK_DIRT) &&
+                            t.y + 1 < WL_CHUNK_H &&
+                            wl_world_get_block(w, t.x, t.y + 1, t.z) == WL_BLOCK_AIR;
+            if (tillable && wl_world_set_block(w, t.x, t.y, t.z, WL_BLOCK_FARMLAND)) {
+                p->action_swing = 0.28f;
+                wl_audio_play(audio, WL_SND_PLACE);
+                damage_tool(p, slot, audio);
+                p->place_cooldown = 0.25;
+            }
+        } else if (slot->item == WL_ITEM_SEEDS && slot->count > 0 &&
+                   p->place_cooldown <= 0.0) {
+            /* plant on farmland with open air above */
+            bool plantable = t.id == WL_BLOCK_FARMLAND &&
+                             t.y + 1 < WL_CHUNK_H &&
+                             wl_world_get_block(w, t.x, t.y + 1, t.z) == WL_BLOCK_AIR;
+            if (plantable && wl_world_set_block(w, t.x, t.y + 1, t.z,
+                                                wl_wheat_id(1))) {
+                p->action_swing = 0.28f;
+                wl_audio_play(audio, WL_SND_PLACE);
+                wl_world_schedule_water(w, t.x, t.y + 1, t.z,
+                                        18.0f + (float)((t.x * 31 + t.z * 17) % 97) * 0.2f);
+                if (gamemode == WL_WORLD_GAMEMODE_SURVIVAL)
+                    wl_inv_consume_slot(&p->inv, p->selected_slot);
+                p->place_cooldown = 0.25;
+            }
         }
     }
 

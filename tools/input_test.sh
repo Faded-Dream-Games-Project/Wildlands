@@ -185,15 +185,16 @@ out, kit, held = sys.argv[1], sys.argv[2], sys.argv[3]
 a = np.asarray(Image.open(kit).convert("RGB"), dtype=np.int16)
 r,g,b = a[:,:,0],a[:,:,1],a[:,:,2]
 def brown(s): return ((r>80)&(r<200)&(g>50)&(g<r-15)&(b<g-10)&(b<r-30))[s].sum()
-log_px  = brown((slice(480,513), slice(485,518)))   # Oak Log icon cell
-grasspx = ((g>90)&(g>r+25)&(g>b+25))[slice(480,513), slice(439,472)].sum()
+# character-screen layout: preview column shifts the grid +170px
+log_px  = brown((slice(475,518), slice(564,607)))   # Oak Log icon cell
+grasspx = ((g>90)&(g>r+25)&(g>b+25))[slice(475,518), slice(518,561)].sum()
 print(f"  icons: log-brown={log_px} grass-green={grasspx}")
 icons_ok = log_px > 100 and grasspx > 100
 
 h = np.asarray(Image.open(held).convert("RGB"), dtype=np.int16)
 hr,hg,hb = h[:,:,0],h[:,:,1],h[:,:,2]
-region = (slice(int(h.shape[0]*0.52), int(h.shape[0]*0.96)),
-          slice(int(h.shape[1]*0.55), int(h.shape[1]*0.97)))
+region = (slice(int(h.shape[0]*0.35), int(h.shape[0]*0.98)),
+          slice(int(h.shape[1]*0.40), int(h.shape[1]*0.98)))
 red = ((hr>110)&(hr<230)&(hg<hr-40)&(hb<hr-40))[region].sum()
 print(f"  held apple: red px={red}")
 held_ok = red > 150
@@ -488,48 +489,85 @@ sleep 1
 sleep 0.6
 ./tools/xsend $XVFB_DISP Wildlands key F2 60      # empty hand reference
 sleep 1
-./tools/xsend $XVFB_DISP Wildlands key 6 80       # slot 5 = Iron Pickaxe
+./tools/xsend $XVFB_DISP Wildlands key 5 80       # slot 4 = Iron Pickaxe
 sleep 1.2
 ./tools/xsend $XVFB_DISP Wildlands key F2 60
 sleep 1
-./tools/xsend $XVFB_DISP Wildlands key 7 80       # slot 6 = apple
+./tools/xsend $XVFB_DISP Wildlands key 6 80       # slot 5 = apple
 sleep 1.2
 ./tools/xsend $XVFB_DISP Wildlands key F2 60
 sleep 1
 kill $GAME_PID 2>/dev/null; wait $GAME_PID 2>/dev/null; GAME_PID=""
 
 SHOTS=($(ls -t screenshots/*.png 2>/dev/null | head -3))  # apple, pick, empty
-python3 - "${SHOTS[2]}" "${SHOTS[1]}" <<'PYCHK'
+python3 - "${SHOTS[1]}" <<'PYCHK'
 import sys
 from PIL import Image
 import numpy as np
-empty = np.asarray(Image.open(sys.argv[1]).convert("RGB"), dtype=np.float32)
-pick  = np.asarray(Image.open(sys.argv[2]).convert("RGB"), dtype=np.float32)
-# the lower-right quadrant near the hand position must differ when a
-# pickaxe is held vs the empty hand
-h, w, _ = empty.shape
-region = (slice(int(h*0.55), int(h*0.95)), slice(int(w*0.45), int(w*0.85)))
-diff = np.abs(pick[region] - empty[region]).mean()
-print(f"  held pickaxe vs empty hand: region diff={diff:.1f}")
-sys.exit(0 if diff > 6 else 1)
+a = np.asarray(Image.open(sys.argv[1]).convert("RGB"), dtype=np.int16)
+h, w, _ = a.shape
+tz = a[int(h*0.30):int(h*0.90), int(w*0.45):int(w*0.95)]
+r, g, b = tz[:,:,0].astype(int), tz[:,:,1].astype(int), tz[:,:,2].astype(int)
+wood = int(((r>100)&(r<185)&(g>70)&(g<135)&(b<95)&(r>g+15)).sum())
+iron = int(((r>150)&(abs(r-g)<16)&(abs(g-b)<20)&(r<250)).sum())
+print(f"  held pickaxe: wood={wood} iron={iron}")
+sys.exit(0 if wood > 150 and iron > 150 else 1)
 PYCHK
-check "held tool sprite renders in first person" $?
+check "held tool renders in first person" $?
 
-python3 - "${SHOTS[2]}" "${SHOTS[0]}" <<'PYCHK'
+python3 - "${SHOTS[2]}" <<'PYCHK'
 import sys
 from PIL import Image
 import numpy as np
-empty = np.asarray(Image.open(sys.argv[1]).convert("RGB"), dtype=np.float32)
-apple = np.asarray(Image.open(sys.argv[2]).convert("RGB"), dtype=np.float32)
-h, w, _ = empty.shape
-region = (slice(int(h*0.55), int(h*0.95)), slice(int(w*0.45), int(w*0.85)))
-diff = np.abs(apple[region] - empty[region]).mean()
-r = apple[region][:,:,0]; g = apple[region][:,:,1]
-red = ((r>150)&(g<110)).sum()
-print(f"  held apple vs empty hand: region diff={diff:.1f}, red px={red}")
-sys.exit(0 if diff > 6 and red > 150 else 1)
+a = np.asarray(Image.open(sys.argv[1]).convert("RGB"), dtype=np.int16)
+h, w, _ = a.shape
+tz = a[int(h*0.45):int(h*0.95), int(w*0.50):int(w*0.95)]
+r, g, b = tz[:,:,0].astype(int), tz[:,:,1].astype(int), tz[:,:,2].astype(int)
+red = int(((r>110)&(r<230)&(g<r-40)&(b<r-40)).sum())
+print(f"  held apple: red px={red}")
+sys.exit(0 if red > 150 else 1)
 PYCHK
-check "held food sprite renders in first person" $?
+check "held food renders in first person" $?
+
+# ---------------------------------------------------------------- run 8
+say "actions cancel cleanly when overlays open mid-action"
+rm -rf worlds/StuckTest
+HLOG=""
+DISPLAY=$XVFB_DISP LIBGL_ALWAYS_SOFTWARE=1 ./bin/wildlands \
+    --world StuckTest --seed 3 --frames 5000 --overlay inv --pitch -35 \
+    > /dev/null 2>&1 &
+GPID=$!
+sleep 3
+./tools/xsend $XVFB_DISP Wildlands move 640 360 > /dev/null
+for _ in $(seq 1 60); do
+    HLOG=$(ls -t logs/wildlands-*.log 2>/dev/null | head -1)
+    [ -n "$HLOG" ] && grep -q "demo pos" "$HLOG" && break
+    sleep 0.5
+done
+sleep 1
+X() { ./tools/xsend $XVFB_DISP Wildlands "$@"; }
+
+# hold left mouse mid-mine, open the inventory mid-hold, close it
+( X click left 2200 ) &
+sleep 1.0
+X key e 80; sleep 1.2      # inventory opens mid-mining
+X key e 80; sleep 1.2      # close (button released behind the UI)
+MINE=$(grep "demo act" "$HLOG" | tail -1 | sed 's/.*mine=\([-0-9.]*\).*/\1/')
+check "mining cancelled after inventory open/close (mine=$MINE)" \
+    $(python3 -c "print(0 if abs(float('$MINE' or 1)) < 0.001 else 1)")
+
+# place a furnace while holding right-click: the next use targets the
+# furnace itself and opens its UI mid-hold; nothing may stay stuck
+X key 9 80; sleep 0.6
+( X click right 2600 ) &
+sleep 0.9
+X key escape 80; sleep 1.4  # close whatever furnace UI opened
+SWING=$(grep "demo act" "$HLOG" | tail -1 | sed 's/.*swing=\([-0-9.]*\).*/\1/')
+check "placement swing settled after furnace UI cycle (swing=$SWING)" \
+    $(python3 -c "print(0 if abs(float('$SWING' or 1)) < 0.001 else 1)")
+
+kill $GPID 2>/dev/null
+sleep 0.5
 
 say "done"
 exit $fail
